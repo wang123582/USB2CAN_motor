@@ -7,98 +7,79 @@ import sys
 PORT = "/dev/ttyACM0"
 BAUD = 921600
 
-def print_hex(data, prefix="Raw"):
-    print(f"{prefix}: " + " ".join([f"{b:02X}" for b in data]))
+def parse_gm6020(can_id, payload):
+    """解析 GM6020/DJI 电机数据"""
+    if len(payload) < 8: return
+    
+    # DJI 反馈格式 (大端): Angle(2) RPM(2) Current(2) Temp(1) Null(1)
+    angle, rpm, current, temp = struct.unpack('>hhhB', payload[:7])
+    
+    # 计算物理角度 (0-8191 -> 0-360度)
+    angle_deg = (angle / 8191.0) * 360.0
+    
+    print(f"   [ID: {hex(can_id)}] "
+          f"RPM: {rpm:5d} | "
+          f"Current: {current:5d} | "
+          f"Temp: {temp:2d}°C | "
+          f"Angle: {angle:5d} ({angle_deg:.1f}°)")
 
-def debug_process():
+def main():
     try:
-        ser = serial.Serial(PORT, BAUD, timeout=0.05)
-        print(f"成功打开串口 {PORT}，正在监听数据...")
-        print("请用手转动电机，或观察电机上电后的反馈...")
-        print("-" * 40)
+        ser = serial.Serial(PORT, BAUD, timeout=0.02)
+        print(f"✅ 串口 {PORT} 打开成功")
+        print("⚡ 正在监听 CAN 总线 (按 Ctrl+C 退出)...")
+        print("-" * 60)
     except Exception as e:
-        print(f"无法打开串口: {e}")
+        print(f"❌ 无法打开串口: {e}")
         return
 
     buffer = bytearray()
 
     while True:
         try:
-            # 读取所有等待的数据
-            count = ser.inWaiting()
-            if count > 0:
-                new_data = ser.read(count)
-                buffer.extend(new_data)
+            # 读取数据
+            if ser.inWaiting() > 0:
+                data = ser.read(ser.inWaiting())
+                buffer.extend(data)
 
-                # === 1. 打印原始接收数据 (帮助分析帧头) ===
-                # 为了防止刷屏太快，每次打印一部分
-                print_hex(new_data, prefix="RECV")
-
-                # === 2. 尝试分析帧结构 ===
-                # 只有当缓冲区有一定数据时才分析
-                while len(buffer) >= 30: # 假设最小包长是十几字节，取30安全
+                # === 核心解析循环 ===
+                while len(buffer) >= 16: # 帧长固定为 16
                     
-                    # 🔍 猜测 A: 按照 CSV 的 55 AA 格式寻找
+                    # 1. 寻找帧头 55 AA
                     if buffer[0] == 0x55 and buffer[1] == 0xAA:
-                        # CSV 格式: 55 AA Len Cmd ... Data在第21字节
-                        frame_len = buffer[2] # 通常是 0x1E (30)
+                        # 提取完整一帧 (16字节)
+                        frame = buffer[:16]
+                        buffer = buffer[16:] # 移出缓冲区
                         
-                        if len(buffer) < frame_len:
-                            break # 数据不够，等待下一波
+                        # 2. 打印原始 Hex (调试用)
+                        raw_hex = ' '.join([f"{b:02X}" for b in frame])
+                        print(f"RAW: {raw_hex}")
                         
-                        # 提取一整帧
-                        frame = buffer[:frame_len]
-                        buffer = buffer[frame_len:] # 移出缓冲区
+                        # 3. 提取 ID (Byte 4-7, 小端)
+                        can_id = int.from_bytes(frame[4:8], byteorder='little')
                         
-                        print(f"发现 55 AA 帧 (Len={frame_len})")
+                        # 4. 提取 Payload (Byte 8-15)
+                        payload = frame[8:16]
                         
-                        # 提取 Payload (根据CSV是 Data21-Data28)
-                        # 索引 21 到 29
-                        payload = frame[21:29]
-                        print_hex(payload, prefix="  >> Payload")
-                        
-                        # 尝试解析 DJI 数据
-                        try_parse_dji(payload)
-
-                    # 🔍 猜测 B: 按照你旧代码的 0x64 0x63 (d c) 格式寻找
-                    elif buffer[0] == 100 and buffer[1] == 99:
-                        # 旧代码逻辑不明，假设紧跟的是数据
-                        # 假设包长 20 左右？这里仅做演示
-                        print("发现旧协议头 (64 63)!")
-                        # 假设后面紧跟ID和数据，先把前几字节打出来看看
-                        print_hex(buffer[:16], prefix="  >> OldProto")
-                        buffer = buffer[1:] # 移一位继续找
+                        # 5. 解析并显示
+                        parse_gm6020(can_id, payload)
+                        print("-" * 40)
                         
                     else:
-                        # 如果都不是，滑动窗口，丢弃第一个字节，继续找
+                        # 如果不是 55 AA，丢弃第一个字节，继续寻找
                         buffer.pop(0)
-
-            time.sleep(0.01)
+            
+            time.sleep(0.001)
 
         except KeyboardInterrupt:
-            print("\n停止调试")
+            print("\n🛑 停止监听")
             break
         except Exception as e:
-            print(f"错误: {e}")
+            print(f"\n❌ 错误: {e}")
             break
-
-def try_parse_dji(payload):
-    """
-    尝试将8字节解析为 DJI 电机反馈
-    格式: Angle(2) RPM(2) Current(2) Temp(1) Null(1)
-    """
-    if len(payload) < 8: return
     
-    # 使用大端解析
-    angle, rpm, current, temp = struct.unpack('>hhhB', payload[:7])
-    
-    print(f"  >> 解析尝试: RPM={rpm}, Cur={current}, Angle={angle}, Temp={temp}°C")
-    
-    # 简单的校验逻辑：温度通常在 20-60 之间
-    if 10 < temp < 80:
-        print("     ✅ 看起来像是正确的数据！")
-    else:
-        print("     ❌ 数据看起来不对 (温度异常)")
+    if ser.isOpen():
+        ser.close()
 
 if __name__ == "__main__":
-    debug_process()
+    main()

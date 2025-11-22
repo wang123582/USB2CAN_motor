@@ -1,11 +1,10 @@
 import time
 
-class PIDController:
-    def __init__(self, kp, ki, kd, out_min, out_max):
+class PID:
+    def __init__(self, kp, ki, kd, out_max):
         self.kp = kp
         self.ki = ki
         self.kd = kd
-        self.out_min = out_min
         self.out_max = out_max
         
         self.integral = 0
@@ -20,25 +19,26 @@ class PIDController:
 
         error = target - current
         
-        # 比例 P
-        p_out = self.kp * error
+        # P
+        p_term = self.kp * error
         
-        # 积分 I (带抗饱和)
+        # I (抗饱和)
         self.integral += error * dt
-        if self.integral > self.out_max / (self.ki + 1e-6):
-            self.integral = self.out_max / (self.ki + 1e-6)
-        elif self.integral < self.out_min / (self.ki + 1e-6):
-            self.integral = self.out_min / (self.ki + 1e-6)
-        i_out = self.ki * self.integral
+        # 简单的 I 限幅
+        i_limit = self.out_max / (self.ki if self.ki > 0 else 1.0) 
+        if self.integral > i_limit: self.integral = i_limit
+        if self.integral < -i_limit: self.integral = -i_limit
         
-        # 微分 D
-        d_out = self.kd * (error - self.prev_error) / dt
+        i_term = self.ki * self.integral
+        
+        # D
+        d_term = self.kd * (error - self.prev_error) / dt
         self.prev_error = error
         
-        output = p_out + i_out + d_out
+        output = p_term + i_term + d_term
         
-        # 输出限幅
+        # 总输出限幅
         if output > self.out_max: output = self.out_max
-        if output < self.out_min: output = self.out_min
+        if output < -self.out_max: output = -self.out_max
             
         return output

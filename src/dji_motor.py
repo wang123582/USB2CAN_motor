@@ -1,24 +1,40 @@
 import struct
 
-class DJIMotor:
-    def __init__(self, motor_id, can_id_base=0x200):
+class GM6020:
+    def __init__(self, motor_id):
+        """
+        motor_id: 拨码开关设定的 ID (1-4)
+        """
         self.id = motor_id
-        self.feedback_id = can_id_base + motor_id
         
-        self.angle = 0
-        self.rpm = 0
-        self.current = 0
-        self.temp = 0
+        # GM6020 ID映射逻辑
+        # 反馈 ID: 1->0x205, 2->0x206 ...
+        self.feedback_id = 0x205 + (motor_id - 1)
+        
+        # 控制 ID: 1-4号电机统一用 0x1FF
+        self.control_id = 0x1FF
+        
+        # 状态存储
+        self.angle = 0     # 0-8191
+        self.rpm = 0       # 转速
+        self.current = 0   # 实际转矩电流
+        self.temp = 0      # 温度
 
-    def parse_feedback(self, raw_data):
-        if len(raw_data) < 8: return
-        # 大端解析: Angle, RPM, Current, Temp, Null
-        (self.angle, self.rpm, self.current, self.temp) = struct.unpack('>hhhB', raw_data[:7])
+    def parse_feedback(self, payload):
+        """解析8字节反馈数据"""
+        if len(payload) < 8: return
+        # DJI 格式 (Big Endian): Angle(2) RPM(2) Current(2) Temp(1) Null(1)
+        (self.angle, self.rpm, self.current, self.temp) = struct.unpack('>hhhB', payload[:7])
 
-    def get_current_bytes(self, current_val):
-        # 这里的限幅取决于电机型号，3508/6020通常最大16384或30000
-        limit = 25000 
-        if current_val > limit: current_val = limit
-        if current_val < -limit: current_val = -limit
-        val = int(current_val)
+    def get_voltage_bytes(self, voltage):
+        """
+        GM6020 电压控制模式
+        范围: -30000 ~ 30000
+        """
+        limit = 30000
+        if voltage > limit: voltage = limit
+        if voltage < -limit: voltage = -limit
+        
+        val = int(voltage)
+        # Big Endian 转换
         return [(val >> 8) & 0xFF, val & 0xFF]
