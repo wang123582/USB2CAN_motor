@@ -1,0 +1,121 @@
+cmake_minimum_required(VERSION 3.8)
+project(motor_control_ros2)
+
+# 编译选项
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# 查找依赖
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+# 消息和服务生成
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/MotorStateGeneric.msg"
+  "msg/DJIMotorState.msg"
+  "msg/DJIMotorCommand.msg"
+  "msg/DamiaoMotorState.msg"
+  "msg/DamiaoMotorCommand.msg"
+  "msg/UnitreeMotorState.msg"
+  "msg/UnitreeMotorCommand.msg"
+  "msg/UnitreeGO8010State.msg"
+  "msg/UnitreeGO8010Command.msg"
+  "srv/MotorEnable.srv"
+  "srv/MotorSetZero.srv"
+  "srv/MotorSwitchMode.srv"
+  DEPENDENCIES std_msgs sensor_msgs geometry_msgs
+)
+
+# 包含目录
+include_directories(include)
+
+# C++ 库 - 核心逻辑
+add_library(motor_control_lib
+  src/can_driver.cpp
+  src/serial_port.cpp
+  src/dji_motor.cpp
+  src/damiao_motor.cpp
+  src/unitree_motor.cpp
+)
+
+# 为库添加依赖
+ament_target_dependencies(motor_control_lib
+  rclcpp
+  std_msgs
+  sensor_msgs
+)
+
+# 导出库接口
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(motor_control_lib "${cpp_typesupport_target}")
+
+# C++ 可执行文件 - 实时控制节点
+add_executable(motor_control_node
+  src/motor_control_node.cpp
+)
+
+# 链接核心库
+target_link_libraries(motor_control_node
+  motor_control_lib
+)
+
+ament_target_dependencies(motor_control_node
+  rclcpp
+  std_msgs
+  sensor_msgs
+)
+
+# 安装目标
+install(TARGETS
+  motor_control_lib
+  motor_control_node
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+# 安装头文件
+install(DIRECTORY include/
+  DESTINATION include
+)
+
+# 安装 Python 模块
+# ament_python_install_package(${PROJECT_NAME})
+
+# 安装 Python 脚本
+install(PROGRAMS
+  motor_control_ros2/lifecycle_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# 安装配置文件和启动文件
+install(DIRECTORY
+  config
+  launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# 测试 (待文件创建后开启)
+# if(BUILD_TESTING)
+#   find_package(ament_lint_auto REQUIRED)
+#   ament_lint_auto_find_test_dependencies()
+#   
+#   # C++ 测试
+#   find_package(ament_cmake_gtest REQUIRED)
+#   # ament_add_gtest(test_dji_motor test/test_dji_motor.cpp)
+#   # target_link_libraries(test_dji_motor motor_control_lib)
+#   
+#   # Python 测试
+#   find_package(ament_cmake_pytest REQUIRED)
+#   # ament_add_pytest_test(test_config test/test_config.py)
+# endif()
+
+ament_package()

@@ -1,0 +1,87 @@
+# CAN 总线配置
+can_buses:
+  can0:
+    port: /dev/ttyACM0
+    baudrate: 921600
+  can1:
+    port: /dev/ttyACM1
+    baudrate: 921600
+
+# 串口配置（宇树电机）
+serial_ports:
+  unitree_fl:
+    port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT9UC8PW-if00-port0
+    baudrate: 4000000
+
+# 电机配置
+motors:
+  # ==================== DJI 电机 ====================
+  # DJI GM6020 示例 - 编码器在输出轴，直驱
+  yaw_motor:
+    type: GM6020
+    can_bus: can0
+    motor_id: 1
+    joint_name: yaw_joint
+    # 编码器配置
+    encoder_on_output: true   # 编码器在输出轴
+    gear_ratio: 1.0           # 直驱，无减速
+    encoder_resolution: 8192  # 8192 线/圈
+  
+  # DJI GM3508 示例 - 编码器在输出轴
+  wheel_motor:
+    type: GM3508
+    can_bus: can0
+    motor_id: 2
+    joint_name: wheel_joint
+    # 编码器配置
+    encoder_on_output: true   # 编码器在输出轴（减速箱之后）
+    gear_ratio: 19.0          # 减速比 19:1
+    encoder_resolution: 8192  # 8192 线/圈
+  
+  # ==================== 达妙电机 ====================
+  # 达妙 DM4340 示例 - 双编码器，输出轴绝对位置
+  joint1_motor:
+    type: DM4340
+    can_bus: can1
+    can_id: 0x01
+    master_id: 0x11           # 建议: CAN_ID + 0x10
+    joint_name: joint1
+    # 编码器配置
+    encoder_on_output: true   # 双编码器在输出轴
+    gear_ratio: 40.0          # 减速比 40:1（仅供参考）
+    # MIT 模式参数范围
+    p_min: -12.5
+    p_max: 12.5
+    v_min: -30.0
+    v_max: 30.0
+    t_min: -10.0
+    t_max: 10.0
+    kp_max: 500.0
+    kd_max: 5.0
+  
+  # ==================== 宇树电机 ====================
+  # 宇树 A1 示例 - 编码器在电机侧
+  fl_hip_motor:
+    type: UnitreeA1
+    serial_port: unitree_fl
+    leg_id: 0
+    motor_id: 0
+    joint_name: fl_hip
+    direction: 1              # 电机方向 (1 或 -1)
+    offset: 0.0               # 零点偏移
+    # 编码器配置
+    encoder_on_output: false  # 编码器在电机转子侧
+    gear_ratio: 9.1           # 减速比 9.1:1（用于转换）
+  
+  # 宇树 GO-8010 示例 - 编码器在电机侧
+  joint2_motor:
+    type: UnitreeGO8010
+    serial_port: unitree_port
+    motor_id: 1
+    joint_name: joint2
+    direction: 1              # 电机方向 (1 或 -1)
+    offset: 0.0               # 零点偏移
+    # 编码器配置
+    encoder_on_output: false  # 编码器在电机转子侧
+    gear_ratio: 6.33          # 减速比 6.33:1（用于转换）
+

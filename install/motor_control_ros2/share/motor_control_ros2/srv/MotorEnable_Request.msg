@@ -1,0 +1,2 @@
+string[] motor_names           # 空数组 = 所有电机
+bool enable                    # true=使能, false=失能

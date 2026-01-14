@@ -1,0 +1,5 @@
+motor_control_node:
+  ros__parameters:
+    control_frequency: 500.0     # Hz
+    publish_frequency: 100.0     # Hz
+    config_file: "config/motors.yaml"
