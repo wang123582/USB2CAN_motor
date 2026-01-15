@@ -112,8 +112,8 @@ void CANInterface::buildTxFrame(uint32_t can_id, const uint8_t* data, size_t len
   tx_buffer_[6] = 0x00;
   tx_buffer_[7] = 0x00;
   
-  // 时间间隔 (32bit 小端) = 10ms
-  tx_buffer_[8] = 0x0A;
+  // 时间间隔 (32bit 小端) = 2ms
+  tx_buffer_[8] = 0x02;
   tx_buffer_[9] = 0x00;
   tx_buffer_[10] = 0x00;
   tx_buffer_[11] = 0x00;
@@ -183,13 +183,14 @@ size_t CANInterface::sendBatch(const std::vector<CANFrame>& frames) {
 
 bool CANInterface::parseFrame(CANFrame& frame) {
   // 尝试从累积缓冲区中解析完整帧
+  // 根据文档：AA [CMD] [格式] [CANID 4字节] [数据 8字节] 55 (共16字节)
   while (rx_accumulator_.size() >= 16) {
-    // 寻找帧头 55 AA
+    // 寻找帧头 0xAA
     bool found_header = false;
     size_t header_pos = 0;
     
-    for (size_t i = 0; i <= rx_accumulator_.size() - 2; ++i) {
-      if (rx_accumulator_[i] == 0x55 && rx_accumulator_[i+1] == 0xAA) {
+    for (size_t i = 0; i < rx_accumulator_.size(); ++i) {
+      if (rx_accumulator_[i] == 0xAA) {
         found_header = true;
         header_pos = i;
         break;
@@ -197,10 +198,8 @@ bool CANInterface::parseFrame(CANFrame& frame) {
     }
     
     if (!found_header) {
-      // 没有找到帧头，清空缓冲区（保留最后一个字节，可能是帧头的一部分）
-      if (rx_accumulator_.size() > 1) {
-        rx_accumulator_.erase(rx_accumulator_.begin(), rx_accumulator_.end() - 1);
-      }
+      // 没有找到帧头，清空缓冲区
+      rx_accumulator_.clear();
       return false;
     }
     
@@ -216,14 +215,29 @@ bool CANInterface::parseFrame(CANFrame& frame) {
       return false;
     }
     
-    // 解析帧
-    // 格式: 55 AA [2字节未知] [4字节CAN ID] [8字节数据]
-    frame.can_id = rx_accumulator_[4] | (rx_accumulator_[5] << 8) | 
-                   (rx_accumulator_[6] << 16) | (rx_accumulator_[7] << 24);
+    // 检查帧尾
+    if (rx_accumulator_[15] != 0x55) {
+      // 帧尾不正确，丢弃这个帧头，继续寻找
+      rx_accumulator_.erase(rx_accumulator_.begin(), rx_accumulator_.begin() + 1);
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      stats_.frame_errors++;
+      continue;
+    }
     
-    // 数据 (Byte 8-15, 固定8字节)
+    // 解析帧
+    // Byte 0: 0xAA (帧头)
+    // Byte 1: CMD
+    // Byte 2: 格式 (包含数据长度、帧类型等)
+    // Byte 3-6: CAN ID (小端)
+    // Byte 7-14: 数据 (8字节)
+    // Byte 15: 0x55 (帧尾)
+    
+    frame.can_id = rx_accumulator_[3] | (rx_accumulator_[4] << 8) | 
+                   (rx_accumulator_[5] << 16) | (rx_accumulator_[6] << 24);
+    
+    // 数据 (Byte 7-14, 固定8字节)
     frame.len = 8;
-    memcpy(frame.data, &rx_accumulator_[8], 8);
+    memcpy(frame.data, &rx_accumulator_[7], 8);
     
     // 移除已处理的帧
     rx_accumulator_.erase(rx_accumulator_.begin(), rx_accumulator_.begin() + 16);
@@ -353,6 +367,19 @@ bool CANNetwork::send(const std::string& interface_name, uint32_t can_id,
   }
   
   return interface->send(can_id, data, len);
+}
+
+size_t CANNetwork::broadcast(uint32_t can_id, const uint8_t* data, size_t len) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  
+  size_t sent_count = 0;
+  for (auto& [name, interface] : interfaces_) {
+    if (interface->send(can_id, data, len)) {
+      sent_count++;
+    }
+  }
+  
+  return sent_count;
 }
 
 void CANNetwork::setGlobalRxCallback(CANRxCallback callback) {

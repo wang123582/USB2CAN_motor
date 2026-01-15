@@ -121,6 +121,20 @@ public:
   }
   
   /**
+   * @brief 设置接口名称
+   */
+  void setInterfaceName(const std::string& name) {
+    interface_name_ = name;
+  }
+  
+  /**
+   * @brief 获取接口名称
+   */
+  std::string getInterfaceName() const {
+    return interface_name_;
+  }
+  
+  /**
    * @brief 获取输出轴位置（弧度）
    * 
    * 如果编码器在输出轴，直接返回；
@@ -218,6 +232,9 @@ protected:
   
   // 心跳检测
   int64_t last_feedback_time_ns_ = 0;  // 最后一次收到反馈的时间（纳秒）
+  
+  // 接口信息
+  std::string interface_name_;  // 所属的 CAN/串口接口名称
 };
 
 } // namespace motor_control

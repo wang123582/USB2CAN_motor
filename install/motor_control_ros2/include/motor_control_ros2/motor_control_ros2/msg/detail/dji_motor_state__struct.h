@@ -41,6 +41,8 @@ typedef struct motor_control_ros2__msg__DJIMotorState
   int16_t current;
   /// 温度
   uint8_t temperature;
+  /// 控制频率 (Hz)
+  double control_frequency;
 } motor_control_ros2__msg__DJIMotorState;
 
 // Struct for a sequence of motor_control_ros2__msg__DJIMotorState.

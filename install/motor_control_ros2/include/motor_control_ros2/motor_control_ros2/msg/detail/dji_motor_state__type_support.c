@@ -40,7 +40,7 @@ void motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c_
   motor_control_ros2__msg__DJIMotorState__fini(message_memory);
 }
 
-static rosidl_typesupport_introspection_c__MessageMember motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c__DJIMotorState_message_member_array[8] = {
+static rosidl_typesupport_introspection_c__MessageMember motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c__DJIMotorState_message_member_array[9] = {
   {
     "header",  // name
     rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE,  // type
@@ -176,13 +176,30 @@ static rosidl_typesupport_introspection_c__MessageMember motor_control_ros2__msg
     NULL,  // fetch(index, &value) function pointer
     NULL,  // assign(index, value) function pointer
     NULL  // resize(index) function pointer
+  },
+  {
+    "control_frequency",  // name
+    rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE,  // type
+    0,  // upper bound of string
+    NULL,  // members of sub message
+    false,  // is array
+    0,  // array size
+    false,  // is upper bound
+    offsetof(motor_control_ros2__msg__DJIMotorState, control_frequency),  // bytes offset in struct
+    NULL,  // default value
+    NULL,  // size() function pointer
+    NULL,  // get_const(index) function pointer
+    NULL,  // get(index) function pointer
+    NULL,  // fetch(index, &value) function pointer
+    NULL,  // assign(index, value) function pointer
+    NULL  // resize(index) function pointer
   }
 };
 
 static const rosidl_typesupport_introspection_c__MessageMembers motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c__DJIMotorState_message_members = {
   "motor_control_ros2__msg",  // message namespace
   "DJIMotorState",  // message name
-  8,  // number of fields
+  9,  // number of fields
   sizeof(motor_control_ros2__msg__DJIMotorState),
   motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c__DJIMotorState_message_member_array,  // message members
   motor_control_ros2__msg__DJIMotorState__rosidl_typesupport_introspection_c__DJIMotorState_init_function,  // function to initialize message memory (memory has to be allocated)

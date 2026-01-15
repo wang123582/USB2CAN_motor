@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/UnitreeMotorCommand.msg"
   "msg/UnitreeGO8010State.msg"
   "msg/UnitreeGO8010Command.msg"
+  "msg/ControlFrequency.msg"
   "srv/MotorEnable.srv"
   "srv/MotorSetZero.srv"
   "srv/MotorSwitchMode.srv"

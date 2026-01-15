@@ -51,6 +51,7 @@ struct DJIMotorState_
       this->rpm = 0;
       this->current = 0;
       this->temperature = 0;
+      this->control_frequency = 0.0;
     }
   }
 
@@ -69,6 +70,7 @@ struct DJIMotorState_
       this->rpm = 0;
       this->current = 0;
       this->temperature = 0;
+      this->control_frequency = 0.0;
     }
   }
 
@@ -97,6 +99,9 @@ struct DJIMotorState_
   using _temperature_type =
     uint8_t;
   _temperature_type temperature;
+  using _control_frequency_type =
+    double;
+  _control_frequency_type control_frequency;
 
   // setters for named parameter idiom
   Type & set__header(
@@ -145,6 +150,12 @@ struct DJIMotorState_
     const uint8_t & _arg)
   {
     this->temperature = _arg;
+    return *this;
+  }
+  Type & set__control_frequency(
+    const double & _arg)
+  {
+    this->control_frequency = _arg;
     return *this;
   }
 
@@ -212,6 +223,9 @@ struct DJIMotorState_
       return false;
     }
     if (this->temperature != other.temperature) {
+      return false;
+    }
+    if (this->control_frequency != other.control_frequency) {
       return false;
     }
     return true;

@@ -22,6 +22,7 @@
 #include "motor_control_ros2/msg/unitree_motor_command.hpp"
 #include "motor_control_ros2/msg/unitree_go8010_state.hpp"
 #include "motor_control_ros2/msg/unitree_go8010_command.hpp"
+#include "motor_control_ros2/msg/control_frequency.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -112,6 +113,9 @@ public:
       std::chrono::milliseconds(static_cast<int>(1000 / publish_freq)),
       std::bind(&MotorControlNode::publishStates, this)
     );
+    
+    // 初始化频率统计
+    last_freq_report_time_ = this->now();
     
     RCLCPP_INFO(this->get_logger(), "电机控制节点已启动 - 控制频率: %.1f Hz, 发布频率: %.1f Hz",
                 control_freq, publish_freq);
@@ -225,7 +229,6 @@ private:
    * @brief 从配置添加 CAN 电机
    */
   void addMotorFromConfig(const MotorConfig& config, const std::string& interface_name) {
-    (void)interface_name;  // 暂时未使用，保留以便将来扩展
     MotorType motor_type;
     
     // 解析电机类型
@@ -245,15 +248,17 @@ private:
     // 创建电机
     if (motor_type == MotorType::DJI_GM6020 || motor_type == MotorType::DJI_GM3508) {
       auto motor = std::make_shared<DJIMotor>(config.name, motor_type, config.id, 0);
+      motor->setInterfaceName(interface_name);  // 设置接口名称
       motors_[config.name] = motor;
       dji_motors_.push_back(motor);
-      RCLCPP_INFO(this->get_logger(), "添加 DJI 电机: %s (%s, ID=%d)", 
-                  config.name.c_str(), config.type.c_str(), config.id);
+      RCLCPP_INFO(this->get_logger(), "添加 DJI 电机: %s (%s, ID=%d) -> %s", 
+                  config.name.c_str(), config.type.c_str(), config.id, interface_name.c_str());
     } else if (motor_type == MotorType::DAMIAO_DM4340 || motor_type == MotorType::DAMIAO_DM4310) {
       auto motor = std::make_shared<DamiaoMotor>(config.name, motor_type, config.id, 0);
+      motor->setInterfaceName(interface_name);  // 设置接口名称
       motors_[config.name] = motor;
-      RCLCPP_INFO(this->get_logger(), "添加达妙电机: %s (%s, ID=%d)", 
-                  config.name.c_str(), config.type.c_str(), config.id);
+      RCLCPP_INFO(this->get_logger(), "添加达妙电机: %s (%s, ID=%d) -> %s", 
+                  config.name.c_str(), config.type.c_str(), config.id, interface_name.c_str());
     }
   }
   
@@ -303,6 +308,11 @@ private:
     unitree_go_state_pub_ = this->create_publisher<motor_control_ros2::msg::UnitreeGO8010State>(
       "unitree_go8010_states", 10
     );
+    
+    // 控制频率发布者
+    control_freq_pub_ = this->create_publisher<motor_control_ros2::msg::ControlFrequency>(
+      "control_frequency", 10
+    );
   }
   
   void createSubscribers() {
@@ -348,6 +358,24 @@ private:
   void controlLoop() {
     // 500Hz 控制循环
     
+    // 频率统计
+    control_loop_count_++;
+    auto now = this->now();
+    double dt = (now - last_freq_report_time_).seconds();
+    if (dt >= 1.0) {  // 每秒更新一次
+      actual_control_freq_ = control_loop_count_ / dt;
+      control_loop_count_ = 0;
+      last_freq_report_time_ = now;
+      
+      // 每5秒输出一次频率信息
+      static int report_count = 0;
+      if (++report_count >= 5) {
+        RCLCPP_INFO(this->get_logger(), "控制频率: %.1f Hz (目标: 500 Hz)", 
+                    actual_control_freq_);
+        report_count = 0;
+      }
+    }
+    
     // 1. 读取电机状态
     readUnitreeMotors();
     
@@ -372,34 +400,53 @@ private:
   void writeDJIMotors() {
     if (dji_motors_.empty()) return;
     
-    // DJI 电机需要拼包发送
-    std::map<uint32_t, std::vector<std::shared_ptr<DJIMotor>>> groups;
+    // 发送频率统计
+    static int tx_count = 0;
+    static auto last_tx_report = this->now();
+    tx_count++;
     
-    for (auto& motor : dji_motors_) {
-      groups[motor->getControlId()].push_back(motor);
+    auto now_tx = this->now();
+    double dt_tx = (now_tx - last_tx_report).seconds();
+    if (dt_tx >= 1.0) {  // 每秒更新一次
+      actual_can_tx_freq_ = tx_count / dt_tx;
+      tx_count = 0;
+      last_tx_report = now_tx;
     }
     
-    for (auto& [control_id, motors] : groups) {
-      uint8_t data[8] = {0};
-      
-      for (auto& motor : motors) {
-        uint8_t motor_id = motor->getMotorId();
-        uint8_t bytes[2];
-        motor->getControlBytes(bytes);
+    // DJI 电机需要拼包发送
+    // 按接口和控制ID分组
+    std::map<std::string, std::map<uint32_t, std::vector<std::shared_ptr<DJIMotor>>>> interface_groups;
+    
+    for (auto& motor : dji_motors_) {
+      std::string interface_name = motor->getInterfaceName();
+      uint32_t control_id = motor->getControlId();
+      interface_groups[interface_name][control_id].push_back(motor);
+    }
+    
+    // 对每个接口的每个控制ID发送
+    for (auto& [interface_name, control_id_groups] : interface_groups) {
+      for (auto& [control_id, motors] : control_id_groups) {
+        uint8_t data[8] = {0};
         
-        int offset = ((motor_id - 1) % 4) * 2;
-        data[offset] = bytes[0];
-        data[offset + 1] = bytes[1];
+        for (auto& motor : motors) {
+          uint8_t motor_id = motor->getMotorId();
+          uint8_t bytes[2];
+          motor->getControlBytes(bytes);
+          
+          int offset = ((motor_id - 1) % 4) * 2;
+          data[offset] = bytes[0];
+          data[offset + 1] = bytes[1];
+        }
+        
+        // 调试日志：显示发送的 CAN 帧
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                             "[CAN TX] %s ID: 0x%03X, Data: %02X %02X %02X %02X %02X %02X %02X %02X",
+                             interface_name.c_str(), control_id,
+                             data[0], data[1], data[2], data[3],
+                             data[4], data[5], data[6], data[7]);
+        
+        can_network_->send(interface_name, control_id, data, 8);
       }
-      
-      // 调试日志：显示发送的 CAN 帧
-      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                           "[CAN TX] ID: 0x%03X, Data: %02X %02X %02X %02X %02X %02X %02X %02X",
-                           control_id,
-                           data[0], data[1], data[2], data[3],
-                           data[4], data[5], data[6], data[7]);
-      
-      can_network_->send("can0", control_id, data, 8);
     }
   }
   
@@ -449,6 +496,7 @@ private:
       msg.online = motor->isOnline();
       msg.angle = motor->getOutputPosition() * 180.0 / M_PI;
       msg.temperature = static_cast<uint8_t>(motor->getTemperature());
+      msg.control_frequency = actual_control_freq_;  // 添加控制频率
       dji_state_pub_->publish(msg);
     }
     
@@ -497,6 +545,14 @@ private:
         unitree_go_state_pub_->publish(msg);
       }
     }
+    
+    // 发布控制频率
+    auto freq_msg = motor_control_ros2::msg::ControlFrequency();
+    freq_msg.header.stamp = now;
+    freq_msg.control_frequency = actual_control_freq_;
+    freq_msg.can_tx_frequency = actual_can_tx_freq_;
+    freq_msg.target_frequency = target_control_freq_;
+    control_freq_pub_->publish(freq_msg);
   }
   
   void djiCommandCallback(const motor_control_ros2::msg::DJIMotorCommand::SharedPtr msg) {
@@ -565,6 +621,7 @@ private:
   rclcpp::Publisher<motor_control_ros2::msg::DamiaoMotorState>::SharedPtr damiao_state_pub_;
   rclcpp::Publisher<motor_control_ros2::msg::UnitreeMotorState>::SharedPtr unitree_state_pub_;
   rclcpp::Publisher<motor_control_ros2::msg::UnitreeGO8010State>::SharedPtr unitree_go_state_pub_;
+  rclcpp::Publisher<motor_control_ros2::msg::ControlFrequency>::SharedPtr control_freq_pub_;
   
   rclcpp::Subscription<motor_control_ros2::msg::DJIMotorCommand>::SharedPtr dji_cmd_sub_;
   rclcpp::Subscription<motor_control_ros2::msg::DamiaoMotorCommand>::SharedPtr damiao_cmd_sub_;
@@ -576,6 +633,13 @@ private:
   
   // 配置相关
   int can_interfaces_count_ = 0;
+  
+  // 频率统计
+  int control_loop_count_ = 0;
+  rclcpp::Time last_freq_report_time_;
+  double actual_control_freq_ = 0.0;
+  double actual_can_tx_freq_ = 0.0;
+  double target_control_freq_ = 500.0;
 };
 
 } // namespace motor_control

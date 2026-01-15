@@ -1,3 +1,5 @@
+msg/ControlFrequency.idl
+msg/ControlFrequency.msg
 msg/DJIMotorCommand.idl
 msg/DJIMotorCommand.msg
 msg/DJIMotorState.idl

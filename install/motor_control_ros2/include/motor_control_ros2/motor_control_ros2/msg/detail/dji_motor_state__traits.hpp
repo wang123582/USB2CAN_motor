@@ -82,6 +82,13 @@ inline void to_flow_style_yaml(
   {
     out << "temperature: ";
     rosidl_generator_traits::value_to_yaml(msg.temperature, out);
+    out << ", ";
+  }
+
+  // member: control_frequency
+  {
+    out << "control_frequency: ";
+    rosidl_generator_traits::value_to_yaml(msg.control_frequency, out);
   }
   out << "}";
 }  // NOLINT(readability/fn_size)
@@ -166,6 +173,16 @@ inline void to_block_style_yaml(
     }
     out << "temperature: ";
     rosidl_generator_traits::value_to_yaml(msg.temperature, out);
+    out << "\n";
+  }
+
+  // member: control_frequency
+  {
+    if (indentation > 0) {
+      out << std::string(indentation, ' ');
+    }
+    out << "control_frequency: ";
+    rosidl_generator_traits::value_to_yaml(msg.control_frequency, out);
     out << "\n";
   }
 }  // NOLINT(readability/fn_size)

@@ -32,6 +32,10 @@ module motor_control_ros2 {
       @verbatim (language="comment", text=
         "温度")
       uint8 temperature;
+
+      @verbatim (language="comment", text=
+        "控制频率 (Hz)")
+      double control_frequency;
     };
   };
 };

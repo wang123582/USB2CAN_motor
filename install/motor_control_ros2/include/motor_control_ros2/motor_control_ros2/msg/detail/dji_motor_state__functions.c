@@ -44,6 +44,7 @@ motor_control_ros2__msg__DJIMotorState__init(motor_control_ros2__msg__DJIMotorSt
   // rpm
   // current
   // temperature
+  // control_frequency
   return true;
 }
 
@@ -64,6 +65,7 @@ motor_control_ros2__msg__DJIMotorState__fini(motor_control_ros2__msg__DJIMotorSt
   // rpm
   // current
   // temperature
+  // control_frequency
 }
 
 bool
@@ -110,6 +112,10 @@ motor_control_ros2__msg__DJIMotorState__are_equal(const motor_control_ros2__msg_
   if (lhs->temperature != rhs->temperature) {
     return false;
   }
+  // control_frequency
+  if (lhs->control_frequency != rhs->control_frequency) {
+    return false;
+  }
   return true;
 }
 
@@ -149,6 +155,8 @@ motor_control_ros2__msg__DJIMotorState__copy(
   output->current = input->current;
   // temperature
   output->temperature = input->temperature;
+  // control_frequency
+  output->control_frequency = input->control_frequency;
   return true;
 }
 

@@ -21,16 +21,32 @@ namespace msg
 namespace builder
 {
 
+class Init_DJIMotorState_control_frequency
+{
+public:
+  explicit Init_DJIMotorState_control_frequency(::motor_control_ros2::msg::DJIMotorState & msg)
+  : msg_(msg)
+  {}
+  ::motor_control_ros2::msg::DJIMotorState control_frequency(::motor_control_ros2::msg::DJIMotorState::_control_frequency_type arg)
+  {
+    msg_.control_frequency = std::move(arg);
+    return std::move(msg_);
+  }
+
+private:
+  ::motor_control_ros2::msg::DJIMotorState msg_;
+};
+
 class Init_DJIMotorState_temperature
 {
 public:
   explicit Init_DJIMotorState_temperature(::motor_control_ros2::msg::DJIMotorState & msg)
   : msg_(msg)
   {}
-  ::motor_control_ros2::msg::DJIMotorState temperature(::motor_control_ros2::msg::DJIMotorState::_temperature_type arg)
+  Init_DJIMotorState_control_frequency temperature(::motor_control_ros2::msg::DJIMotorState::_temperature_type arg)
   {
     msg_.temperature = std::move(arg);
-    return std::move(msg_);
+    return Init_DJIMotorState_control_frequency(msg_);
   }
 
 private:

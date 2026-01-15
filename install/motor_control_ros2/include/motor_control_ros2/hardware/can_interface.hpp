@@ -198,6 +198,15 @@ public:
             const uint8_t* data, size_t len);
   
   /**
+   * @brief 广播 CAN 帧到所有接口
+   * @param can_id CAN ID
+   * @param data 数据指针
+   * @param len 数据长度
+   * @return 成功发送的接口数
+   */
+  size_t broadcast(uint32_t can_id, const uint8_t* data, size_t len);
+  
+  /**
    * @brief 设置全局接收回调
    * @param callback 回调函数
    */

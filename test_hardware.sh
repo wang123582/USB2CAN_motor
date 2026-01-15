@@ -20,7 +20,7 @@ read -p "请输入选项 (1-4): " choice
 case $choice in
     1)
         echo "正在发送 DJI GM6020 控制命令 (ID 1)..."
-        ros2 topic pub --once /dji_motor_command motor_control_ros2/msg/DJIMotorCommand "{joint_name: 'yaw_motor', output: 1000}"
+        ros2 topic pub --once /dji_motor_command motor_control_ros2/msg/DJIMotorCommand "{joint_name: 'DJI6020_1', output: 2000}"
         ;;
     2)
         echo "正在发送 达妙 DM4340 控制命令 (MIT 模式)..."

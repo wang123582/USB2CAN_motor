@@ -10,6 +10,7 @@
 #include "motor_control_ros2/msg/damiao_motor_state.hpp"
 #include "motor_control_ros2/msg/unitree_motor_state.hpp"
 #include "motor_control_ros2/msg/unitree_go8010_state.hpp"
+#include "motor_control_ros2/msg/control_frequency.hpp"
 
 // ANSI 颜色代码
 #define COLOR_RESET   "\033[0m"
@@ -66,6 +67,12 @@ public:
       std::bind(&MotorMonitorNode::unitreeGOCallback, this, std::placeholders::_1)
     );
     
+    // 控制频率订阅者
+    control_freq_sub_ = this->create_subscription<motor_control_ros2::msg::ControlFrequency>(
+      "control_frequency", 10,
+      std::bind(&MotorMonitorNode::controlFreqCallback, this, std::placeholders::_1)
+    );
+    
     // 创建定时器，100Hz 刷新
     display_timer_ = this->create_wall_timer(
       std::chrono::milliseconds(10),  // 100Hz
@@ -116,6 +123,12 @@ private:
     unitree_go_states_[msg->joint_name] = *msg;
     updateMotorStats(unitree_go_stats_[msg->joint_name]);
     checkOnlineStatus(msg->joint_name, unitree_go_stats_[msg->joint_name], msg->online);
+  }
+  
+  void controlFreqCallback(const motor_control_ros2::msg::ControlFrequency::SharedPtr msg) {
+    control_freq_ = msg->control_frequency;
+    can_tx_freq_ = msg->can_tx_frequency;
+    target_freq_ = msg->target_frequency;
   }
   
   void updateMotorStats(MotorStats& stats) {
@@ -207,7 +220,25 @@ private:
     oss << COLOR_DIM << "运行时间: " << std::fixed << std::setprecision(1) << now.seconds() << "s  "
         << "显示频率: " << COLOR_GREEN << std::setprecision(1) << actual_display_hz_ << " Hz" << COLOR_DIM
         << "  目标: 100 Hz"
-        << COLOR_RESET << "\n\n";
+        << COLOR_RESET << "\n";
+    
+    // 控制频率信息
+    oss << COLOR_DIM << "控制频率: ";
+    if (control_freq_ > 0) {
+      if (control_freq_ >= target_freq_ * 0.95) {
+        oss << COLOR_GREEN;
+      } else if (control_freq_ >= target_freq_ * 0.8) {
+        oss << COLOR_YELLOW;
+      } else {
+        oss << COLOR_RED;
+      }
+      oss << std::setprecision(1) << control_freq_ << " Hz" << COLOR_DIM
+          << "  CAN发送: " << COLOR_GREEN << std::setprecision(1) << can_tx_freq_ << " Hz" << COLOR_DIM
+          << "  目标: " << target_freq_ << " Hz";
+    } else {
+      oss << COLOR_RED << "等待数据...";
+    }
+    oss << COLOR_RESET << "\n\n";
     
     // DJI 电机状态
     if (!dji_states_.empty()) {
@@ -223,12 +254,19 @@ private:
         std::string status_color = is_online ? COLOR_GREEN : COLOR_RED;
         std::string status_text = is_online ? "在线" : "离线";
         
+        // 控制频率颜色
+        std::string freq_color = COLOR_GREEN;
+        if (state.control_frequency > 0) {
+          if (state.control_frequency < 400) freq_color = COLOR_RED;
+          else if (state.control_frequency < 475) freq_color = COLOR_YELLOW;
+        }
+        
         oss << "│ " << std::left << std::setw(11) << name << " │ "
             << std::setw(6) << state.model << " │ "
             << status_color << std::setw(6) << status_text << COLOR_RESET << " │ "
             << std::right << std::setw(7) << std::fixed << std::setprecision(1) << state.angle << " │ "
             << std::setw(4) << (int)state.temperature << "°C │ "
-            << std::setw(5) << std::setprecision(0) << dji_stats_[name].actual_hz << "Hz │\n";
+            << freq_color << std::setw(5) << std::setprecision(0) << state.control_frequency << "Hz" << COLOR_RESET << " │\n";
       }
       
       oss << COLOR_DIM 
@@ -321,6 +359,7 @@ private:
   rclcpp::Subscription<motor_control_ros2::msg::DamiaoMotorState>::SharedPtr damiao_sub_;
   rclcpp::Subscription<motor_control_ros2::msg::UnitreeMotorState>::SharedPtr unitree_sub_;
   rclcpp::Subscription<motor_control_ros2::msg::UnitreeGO8010State>::SharedPtr unitree_go_sub_;
+  rclcpp::Subscription<motor_control_ros2::msg::ControlFrequency>::SharedPtr control_freq_sub_;
   
   // 定时器
   rclcpp::TimerBase::SharedPtr display_timer_;
@@ -337,12 +376,17 @@ private:
   std::map<std::string, MotorStats> unitree_stats_;
   std::map<std::string, MotorStats> unitree_go_stats_;
   
+  // 控制频率数据
+  double control_freq_ = 0.0;
+  double can_tx_freq_ = 0.0;
+  double target_freq_ = 500.0;
+  
   // 显示统计
   int display_count_;
   rclcpp::Time last_stat_time_;
   double actual_display_hz_;
   
-  // 心跳超时（毫秒）
+  // 心跳超时
   double heartbeat_timeout_ms_;
 };
 
