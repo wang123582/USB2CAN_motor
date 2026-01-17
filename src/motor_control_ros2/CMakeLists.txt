@@ -29,6 +29,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/UnitreeGO8010State.msg"
   "msg/UnitreeGO8010Command.msg"
   "msg/ControlFrequency.msg"
+  "msg/ChassisCommand.msg"
+  "msg/ChassisState.msg"
+  "msg/SteerWheelState.msg"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
 )
 
@@ -47,6 +50,8 @@ add_library(motor_control_lib
   src/unitree_motor.cpp
   # 配置解析
   src/config_parser.cpp
+  # 运动学
+  src/steer_wheel_kinematics.cpp
 )
 
 # 为库添加依赖
@@ -94,11 +99,29 @@ ament_target_dependencies(motor_monitor_node
   sensor_msgs
 )
 
+# C++ 可执行文件 - 底盘控制节点
+add_executable(chassis_control_node
+  src/chassis_control_node.cpp
+)
+
+# 链接核心库
+target_link_libraries(chassis_control_node
+  motor_control_lib
+)
+
+ament_target_dependencies(chassis_control_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  ament_index_cpp
+)
+
 # 安装目标
 install(TARGETS
   motor_control_lib
   motor_control_node
   motor_monitor_node
+  chassis_control_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
