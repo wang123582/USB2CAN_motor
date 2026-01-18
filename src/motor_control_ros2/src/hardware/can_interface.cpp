@@ -303,12 +303,11 @@ void CANInterface::receiveLoop() {
 
 bool CANInterface::sendRecv(uint32_t can_id, const uint8_t* tx_data, size_t tx_len,
                             CANFrame& rx_frame, int timeout_ms) {
-  // ✅ 先检查 fd，避免对无效文件描述符操作
+  std::lock_guard<std::mutex> lock(sendrecv_mutex_);
+  
   if (fd_ < 0) {
     return false;
   }
-  
-  std::lock_guard<std::mutex> lock(sendrecv_mutex_);
   
   // 1. ✅ 清空接收缓冲区（避免旧数据干扰）
   tcflush(fd_, TCIFLUSH);
@@ -346,12 +345,11 @@ size_t CANInterface::sendRecvBatch(uint32_t can_id, const uint8_t* tx_data, size
                                    const std::vector<uint32_t>& expected_ids,
                                    std::vector<CANFrame>& rx_frames,
                                    int timeout_ms) {
-  // ✅ 先检查 fd，避免对无效文件描述符操作
+  std::lock_guard<std::mutex> lock(sendrecv_mutex_);
+  
   if (fd_ < 0) {
     return 0;
   }
-  
-  std::lock_guard<std::mutex> lock(sendrecv_mutex_);
   
   // 1. ✅ 清空缓冲区
   tcflush(fd_, TCIFLUSH);
