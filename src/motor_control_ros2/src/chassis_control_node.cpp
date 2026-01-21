@@ -96,6 +96,9 @@ public:
             "底盘控制节点启动 - 轮距: %.3fm, 轴距: %.3fm, 轮半径: %.3fm",
             wheel_base_x, wheel_base_y, wheel_radius);
         
+        // 初始化时间戳（必须在创建订阅者之前，确保时间源一致）
+        last_cmd_time_ = this->now();
+        
         // 创建订阅者
         cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10,
