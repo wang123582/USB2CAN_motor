@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include "motor_control_ros2/steer_wheel_kinematics.hpp"
 #include "motor_control_ros2/msg/chassis_state.hpp"
@@ -29,72 +30,32 @@ namespace motor_control {
 class ChassisControlNode : public rclcpp::Node {
 public:
     ChassisControlNode() : Node("chassis_control_node") {
-        // 声明参数
-        this->declare_parameter("control_frequency", 100.0);
-        this->declare_parameter("wheel_base_x", 0.65);
-        this->declare_parameter("wheel_base_y", 0.62);
-        this->declare_parameter("wheel_radius", 0.055);
-        this->declare_parameter("max_linear_velocity", 2.0);
-        this->declare_parameter("max_angular_velocity", 3.14);
+        RCLCPP_INFO(this->get_logger(), "正在初始化底盘控制节点...");
         
-        // 电机映射参数
-        this->declare_parameter("fl_steer_motor", "DJI6020_1");
-        this->declare_parameter("fl_drive_motor", "DJI3508_1");
-        this->declare_parameter("fl_steer_offset", 0.0);
-        this->declare_parameter("fl_drive_direction", 1);
-        
-        this->declare_parameter("fr_steer_motor", "DJI6020_2");
-        this->declare_parameter("fr_drive_motor", "DJI3508_2");
-        this->declare_parameter("fr_steer_offset", 0.0);
-        this->declare_parameter("fr_drive_direction", -1);
-        
-        this->declare_parameter("rl_steer_motor", "DJI6020_3");
-        this->declare_parameter("rl_drive_motor", "DJI3508_3");
-        this->declare_parameter("rl_steer_offset", 0.0);
-        this->declare_parameter("rl_drive_direction", 1);
-        
-        this->declare_parameter("rr_steer_motor", "DJI6020_4");
-        this->declare_parameter("rr_drive_motor", "DJI3508_4");
-        this->declare_parameter("rr_steer_offset", 0.0);
-        this->declare_parameter("rr_drive_direction", -1);
-        
-        // 读取参数
-        control_frequency_ = this->get_parameter("control_frequency").as_double();
-        double wheel_base_x = this->get_parameter("wheel_base_x").as_double();
-        double wheel_base_y = this->get_parameter("wheel_base_y").as_double();
-        wheel_radius_ = this->get_parameter("wheel_radius").as_double();
-        max_linear_velocity_ = this->get_parameter("max_linear_velocity").as_double();
-        max_angular_velocity_ = this->get_parameter("max_angular_velocity").as_double();
-        
-        // 读取电机映射和配置
-        motor_names_.fl_steer = this->get_parameter("fl_steer_motor").as_string();
-        motor_names_.fl_drive = this->get_parameter("fl_drive_motor").as_string();
-        motor_config_.fl_steer_offset = this->get_parameter("fl_steer_offset").as_double();
-        motor_config_.fl_drive_direction = this->get_parameter("fl_drive_direction").as_int();
-        
-        motor_names_.fr_steer = this->get_parameter("fr_steer_motor").as_string();
-        motor_names_.fr_drive = this->get_parameter("fr_drive_motor").as_string();
-        motor_config_.fr_steer_offset = this->get_parameter("fr_steer_offset").as_double();
-        motor_config_.fr_drive_direction = this->get_parameter("fr_drive_direction").as_int();
-        
-        motor_names_.rl_steer = this->get_parameter("rl_steer_motor").as_string();
-        motor_names_.rl_drive = this->get_parameter("rl_drive_motor").as_string();
-        motor_config_.rl_steer_offset = this->get_parameter("rl_steer_offset").as_double();
-        motor_config_.rl_drive_direction = this->get_parameter("rl_drive_direction").as_int();
-        
-        motor_names_.rr_steer = this->get_parameter("rr_steer_motor").as_string();
-        motor_names_.rr_drive = this->get_parameter("rr_drive_motor").as_string();
-        motor_config_.rr_steer_offset = this->get_parameter("rr_steer_offset").as_double();
-        motor_config_.rr_drive_direction = this->get_parameter("rr_drive_direction").as_int();
-        
-        // 初始化运动学
-        kinematics_ = std::make_unique<SteerWheelKinematics>(
-            wheel_base_x, wheel_base_y, wheel_radius_
-        );
+        // 自动加载配置文件
+        std::string config_file;
+        try {
+            config_file = ament_index_cpp::get_package_share_directory("motor_control_ros2") + 
+                         "/config/chassis_params.yaml";
+            RCLCPP_INFO(this->get_logger(), "正在加载配置文件: %s", config_file.c_str());
+            loadChassisParams(config_file);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), 
+                "底盘控制节点初始化失败: %s", e.what());
+            RCLCPP_ERROR(this->get_logger(), 
+                "配置文件路径: %s", config_file.c_str());
+            RCLCPP_ERROR(this->get_logger(), 
+                "请确保配置文件存在且格式正确");
+            throw;  // 重新抛出异常,终止节点启动
+        }
         
         RCLCPP_INFO(this->get_logger(), 
-            "底盘控制节点启动 - 轮距: %.3fm, 轴距: %.3fm, 轮半径: %.3fm",
-            wheel_base_x, wheel_base_y, wheel_radius_);
+            "底盘控制节点启动成功 - 轮距: %.3fm, 轴距: %.3fm, 轮半径: %.3fm",
+            wheel_base_x_, wheel_base_y_, wheel_radius_);
+        RCLCPP_INFO(this->get_logger(), 
+            "电机配置 - FL偏移: %.1f°, FR偏移: %.1f°, RL偏移: %.1f°, RR偏移: %.1f°",
+            motor_config_.fl_steer_offset, motor_config_.fr_steer_offset,
+            motor_config_.rl_steer_offset, motor_config_.rr_steer_offset);
         
         // 初始化时间戳（必须在创建订阅者之前，确保时间源一致）
         last_cmd_time_ = this->now();
@@ -349,6 +310,107 @@ private:
         }
     }
     
+    /**
+     * @brief 从 YAML 配置文件加载底盘参数
+     */
+    void loadChassisParams(const std::string& config_file) {
+        YAML::Node config = YAML::LoadFile(config_file);
+        
+        if (!config["chassis_control_node"] || !config["chassis_control_node"]["ros__parameters"]) {
+            throw std::runtime_error("配置文件格式错误: 缺少 chassis_control_node/ros__parameters 节点");
+        }
+        
+        auto params = config["chassis_control_node"]["ros__parameters"];
+        
+        // 读取控制参数
+        if (!params["control_frequency"]) {
+            throw std::runtime_error("配置文件缺少必需参数: control_frequency");
+        }
+        control_frequency_ = params["control_frequency"].as<double>();
+        
+        if (!params["wheel_base_x"]) {
+            throw std::runtime_error("配置文件缺少必需参数: wheel_base_x");
+        }
+        wheel_base_x_ = params["wheel_base_x"].as<double>();
+        
+        if (!params["wheel_base_y"]) {
+            throw std::runtime_error("配置文件缺少必需参数: wheel_base_y");
+        }
+        wheel_base_y_ = params["wheel_base_y"].as<double>();
+        
+        if (!params["wheel_radius"]) {
+            throw std::runtime_error("配置文件缺少必需参数: wheel_radius");
+        }
+        wheel_radius_ = params["wheel_radius"].as<double>();
+        
+        if (!params["max_linear_velocity"]) {
+            throw std::runtime_error("配置文件缺少必需参数: max_linear_velocity");
+        }
+        max_linear_velocity_ = params["max_linear_velocity"].as<double>();
+        
+        if (!params["max_angular_velocity"]) {
+            throw std::runtime_error("配置文件缺少必需参数: max_angular_velocity");
+        }
+        max_angular_velocity_ = params["max_angular_velocity"].as<double>();
+        
+        // 读取电机映射和配置 - 左前
+        if (!params["fl_steer_motor"]) throw std::runtime_error("配置文件缺少必需参数: fl_steer_motor");
+        motor_names_.fl_steer = params["fl_steer_motor"].as<std::string>();
+        
+        if (!params["fl_drive_motor"]) throw std::runtime_error("配置文件缺少必需参数: fl_drive_motor");
+        motor_names_.fl_drive = params["fl_drive_motor"].as<std::string>();
+        
+        if (!params["fl_steer_offset"]) throw std::runtime_error("配置文件缺少必需参数: fl_steer_offset");
+        motor_config_.fl_steer_offset = params["fl_steer_offset"].as<double>();
+        
+        if (!params["fl_drive_direction"]) throw std::runtime_error("配置文件缺少必需参数: fl_drive_direction");
+        motor_config_.fl_drive_direction = params["fl_drive_direction"].as<int>();
+        
+        // 读取电机映射和配置 - 右前
+        if (!params["fr_steer_motor"]) throw std::runtime_error("配置文件缺少必需参数: fr_steer_motor");
+        motor_names_.fr_steer = params["fr_steer_motor"].as<std::string>();
+        
+        if (!params["fr_drive_motor"]) throw std::runtime_error("配置文件缺少必需参数: fr_drive_motor");
+        motor_names_.fr_drive = params["fr_drive_motor"].as<std::string>();
+        
+        if (!params["fr_steer_offset"]) throw std::runtime_error("配置文件缺少必需参数: fr_steer_offset");
+        motor_config_.fr_steer_offset = params["fr_steer_offset"].as<double>();
+        
+        if (!params["fr_drive_direction"]) throw std::runtime_error("配置文件缺少必需参数: fr_drive_direction");
+        motor_config_.fr_drive_direction = params["fr_drive_direction"].as<int>();
+        
+        // 读取电机映射和配置 - 左后
+        if (!params["rl_steer_motor"]) throw std::runtime_error("配置文件缺少必需参数: rl_steer_motor");
+        motor_names_.rl_steer = params["rl_steer_motor"].as<std::string>();
+        
+        if (!params["rl_drive_motor"]) throw std::runtime_error("配置文件缺少必需参数: rl_drive_motor");
+        motor_names_.rl_drive = params["rl_drive_motor"].as<std::string>();
+        
+        if (!params["rl_steer_offset"]) throw std::runtime_error("配置文件缺少必需参数: rl_steer_offset");
+        motor_config_.rl_steer_offset = params["rl_steer_offset"].as<double>();
+        
+        if (!params["rl_drive_direction"]) throw std::runtime_error("配置文件缺少必需参数: rl_drive_direction");
+        motor_config_.rl_drive_direction = params["rl_drive_direction"].as<int>();
+        
+        // 读取电机映射和配置 - 右后
+        if (!params["rr_steer_motor"]) throw std::runtime_error("配置文件缺少必需参数: rr_steer_motor");
+        motor_names_.rr_steer = params["rr_steer_motor"].as<std::string>();
+        
+        if (!params["rr_drive_motor"]) throw std::runtime_error("配置文件缺少必需参数: rr_drive_motor");
+        motor_names_.rr_drive = params["rr_drive_motor"].as<std::string>();
+        
+        if (!params["rr_steer_offset"]) throw std::runtime_error("配置文件缺少必需参数: rr_steer_offset");
+        motor_config_.rr_steer_offset = params["rr_steer_offset"].as<double>();
+        
+        if (!params["rr_drive_direction"]) throw std::runtime_error("配置文件缺少必需参数: rr_drive_direction");
+        motor_config_.rr_drive_direction = params["rr_drive_direction"].as<int>();
+        
+        // 初始化运动学
+        kinematics_ = std::make_unique<SteerWheelKinematics>(
+            wheel_base_x_, wheel_base_y_, wheel_radius_
+        );
+    }
+    
     // 成员变量
     std::unique_ptr<SteerWheelKinematics> kinematics_;
     MotorNames motor_names_;
@@ -356,6 +418,8 @@ private:
     
     // 参数
     double control_frequency_;
+    double wheel_base_x_;
+    double wheel_base_y_;
     double wheel_radius_;
     double max_linear_velocity_;
     double max_angular_velocity_;
