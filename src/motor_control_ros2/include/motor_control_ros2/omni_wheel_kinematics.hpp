@@ -36,8 +36,8 @@ class OmniWheelKinematics {
 public:
     /**
      * @brief 构造函数
-     * @param wheel_base_x 前后轮距 (m)，底盘中心到前/后轮的距离
-     * @param wheel_base_y 左右轮距 (m)，底盘中心到左/右轮的距离
+     * @param wheel_base_x 前后轮距 (m)，即前后轮之间的距离
+     * @param wheel_base_y 左右轮距 (m)，即左右轮之间的距离
      * @param wheel_radius 轮子半径 (m)
      * @param install_angle 轮子安装角度 (度)，默认 45° (X 形布置)
      */
