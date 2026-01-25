@@ -41,7 +41,7 @@ joystick_control_node:
     # 摇杆映射
     axis_linear_x: 1      # 左摇杆上下 (前后)
     axis_linear_y: 0      # 左摇杆左右 (左右)
-    axis_angular: 2       # 右摇杆左右 (旋转)
+    axis_angular: 3       # 右摇杆左右 (旋转)
     
     # Turbo按钮
     button_turbo: 5       # RB按钮 (索引从0开始)
