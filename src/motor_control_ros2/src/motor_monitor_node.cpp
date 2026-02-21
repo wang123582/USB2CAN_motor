@@ -306,6 +306,8 @@ private:
         bool is_online = isMotorOnline(unitree_go_stats_[name], state.online);
         std::string status_color = is_online ? COLOR_GREEN : COLOR_RED;
         std::string status_text = is_online ? "在线" : "离线";
+
+      
         
         oss << "│ " << std::left << std::setw(11) << name << " │ "
             << std::setw(8) << "GO-8010" << " │ "

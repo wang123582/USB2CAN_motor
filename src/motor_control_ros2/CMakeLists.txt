@@ -19,6 +19,12 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
+
+# 宇树官方 SDK 路径
+set(UNITREE_SDK_PATH "/home/toe/unitree_actuator_sdk")
+set(UNITREE_SDK_INCLUDE "${UNITREE_SDK_PATH}/include")
+set(UNITREE_SDK_LIB "${UNITREE_SDK_PATH}/lib/libUnitreeMotorSDK_Linux64.so")
+
 # 消息生成（不再使用服务）
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotorStateGeneric.msg"
@@ -40,6 +46,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 # 包含目录
 include_directories(include)
+include_directories(${UNITREE_SDK_INCLUDE})
 
 # C++ 库 - 核心逻辑
 add_library(motor_control_lib
