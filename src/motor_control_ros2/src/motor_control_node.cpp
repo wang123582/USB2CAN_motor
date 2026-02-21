@@ -11,8 +11,10 @@
 #include "motor_control_ros2/damiao_motor.hpp"
 #include "motor_control_ros2/unitree_motor.hpp"
 #include "motor_control_ros2/hardware/can_interface.hpp"
-#include "motor_control_ros2/hardware/serial_interface.hpp"
 #include "motor_control_ros2/config_parser.hpp"
+
+#include "unitreeMotor/unitreeMotor.h"
+#include "serialPort/SerialPort.h"
 
 #include "motor_control_ros2/msg/dji_motor_state.hpp"
 #include "motor_control_ros2/msg/dji_motor_command.hpp"
@@ -64,7 +66,7 @@ class MotorControlNode : public rclcpp::Node {
 public:
   MotorControlNode() : Node("motor_control_node") {
     // 声明参数（使用 200Hz 作为默认值，与 Python 一致）
-    this->declare_parameter("control_frequency", 200.0);
+    this->declare_parameter("control_frequency", 2.0);
     this->declare_parameter("config_file", "");
     
     // 尝试从 control_params.yaml 加载控制参数
@@ -118,6 +120,12 @@ public:
     // 创建订阅者
     createSubscribers();
     
+    // **启动宇树电机（使用本地串口驱动）**
+    for (auto& motor : unitree_motors_) {
+      motor->enable();  // 设置为 FOC 模式
+      RCLCPP_INFO(this->get_logger(), "已启用宇树电机: %s", motor->getJointName().c_str());
+    }
+    
     // 启动控制循环（同时发布电机状态）
     double control_freq = this->get_parameter("control_frequency").as_double();
     target_control_freq_ = control_freq;  // 保存目标频率用于发布
@@ -146,9 +154,9 @@ public:
   ~MotorControlNode() {
     can_network_->stopAll();
     can_network_->closeAll();
-    
+
     for (auto& [name, port] : serial_ports_) {
-       port->close();
+      // SDK SerialPort 会自动关闭
     }
   }
 
@@ -167,45 +175,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "已初始化主要电机");
   }
 
-  // 辅助函数：获取或创建串口
-  std::shared_ptr<hardware::SerialInterface> getSerialPort(const std::string& port_name) {
-    if (serial_ports_.find(port_name) == serial_ports_.end()) {
-      auto port = std::make_shared<hardware::SerialInterface>(port_name, 4000000);
-      if (port->open()) {
-        serial_ports_[port_name] = port;
-        RCLCPP_INFO(this->get_logger(), "已打开串口: %s", port_name.c_str());
-      } else {
-        RCLCPP_ERROR(this->get_logger(), "无法打开串口: %s", port_name.c_str());
-        return nullptr;
-      }
-    }
-    return serial_ports_[port_name];
-  }
-
-  void initializeUnitreeMotors() {
-    // 示例代码已注释，请根据实际配置添加电机
-    // 如需添加宇树电机，请取消注释并修改参数
-    
-    /*
-    std::string port_name = "/dev/ttyUSB0";
-    auto port = getSerialPort(port_name);
-    
-    if (port) {
-      auto unitree_motor = std::make_shared<UnitreeMotor>(
-        "fl_hip_motor", MotorType::UNITREE_A1, port, 0, 1, 0.0f
-      );
-      motors_["fl_hip_motor"] = unitree_motor;
-      unitree_motors_.push_back(unitree_motor);
-      RCLCPP_INFO(this->get_logger(), "已添加宇树 A1 电机: fl_hip_motor");
-    }
-    */
-  }
-  
-  /**
-   * @brief 从配置文件初始化电机
-   */
   void initializeFromConfig(const std::string& config_file) {
-    RCLCPP_INFO(this->get_logger(), "正在加载配置文件: %s", config_file.c_str());
     
     // 加载配置
     SystemConfig config = ConfigParser::loadConfig(config_file);
@@ -224,16 +194,10 @@ private:
     
     // 初始化串口接口和电机
     for (const auto& serial_config : config.serial_interfaces) {
-      // 创建串口
-      auto port = std::make_shared<hardware::SerialInterface>(
-        serial_config.device, serial_config.baudrate
-      );
-      
-      if (port->open()) {
-        serial_ports_[serial_config.device] = port;
-        RCLCPP_INFO(this->get_logger(), "已打开串口: %s @ %d bps", 
-                    serial_config.device.c_str(), serial_config.baudrate);
-        
+      // 使用官方 SDK 的 SerialPort
+      auto port = getSerialPort(serial_config.device);
+
+      if (port) {
         // 添加电机
         for (const auto& motor_config : serial_config.motors) {
           addUnitreeMotorFromConfig(motor_config, port);
@@ -243,14 +207,23 @@ private:
       }
     }
     
-    RCLCPP_INFO(this->get_logger(), "配置加载完成 - DJI 电机: %zu, 宇树电机: %zu", 
+    RCLCPP_INFO(this->get_logger(), "配置加载完成 - DJI 电机: %zu, 宇树电机: %zu",
                 dji_motors_.size(), unitree_motors_.size());
   }
-  
+
+  std::shared_ptr<SerialPort> getSerialPort(const std::string& port_name) {
+    if (serial_ports_.find(port_name) == serial_ports_.end()) {
+      auto port = std::make_shared<SerialPort>(port_name);
+      serial_ports_[port_name] = port;
+      RCLCPP_INFO(this->get_logger(), "已打开串口: %s", port_name.c_str());
+    }
+    return serial_ports_[port_name];
+  }
+
   /**
    * @brief 从配置添加 CAN 电机
    */
-  void addMotorFromConfig(const MotorConfig& config, const std::string& interface_name) {
+  void  addMotorFromConfig(const MotorConfig& config, const std::string& interface_name) {
     MotorType motor_type;
     
     // 解析电机类型
@@ -260,9 +233,8 @@ private:
       motor_type = MotorType::DJI_GM3508;
     } else if (config.type == "DM4340") {
       motor_type = MotorType::DAMIAO_DM4340;
-    } else if (config.type == "DM4310") {
-      motor_type = MotorType::DAMIAO_DM4310;
-    } else {
+    } 
+     else {
       RCLCPP_ERROR(this->get_logger(), "未知的电机类型: %s", config.type.c_str());
       return;
     }
@@ -287,29 +259,17 @@ private:
   /**
    * @brief 从配置添加宇树电机
    */
-  void addUnitreeMotorFromConfig(const MotorConfig& config, 
-                                   std::shared_ptr<hardware::SerialInterface> port) {
-    MotorType motor_type;
-    
-    // 解析电机类型
-    if (config.type == "A1") {
-      motor_type = MotorType::UNITREE_A1;
-    } else if (config.type == "GO8010") {
-      motor_type = MotorType::UNITREE_GO8010;
-    } else {
-      RCLCPP_ERROR(this->get_logger(), "未知的宇树电机类型: %s", config.type.c_str());
-      return;
-    }
-    
-    // 创建电机
+  void addUnitreeMotorFromConfig(const MotorConfig& config,
+                                 std::shared_ptr<SerialPort> port) {
     auto motor = std::make_shared<UnitreeMotor>(
-      config.name, motor_type, port, config.id, config.direction, config.offset
+      config.name, MotorType::UNITREE_GO8010, config.id, config.direction, config.offset
     );
+    motor->setSerialPort(port);
     motors_[config.name] = motor;
     unitree_motors_.push_back(motor);
-    
-    RCLCPP_INFO(this->get_logger(), "添加宇树电机: %s (%s, ID=%d)", 
-                config.name.c_str(), config.type.c_str(), config.id);
+
+    RCLCPP_INFO(this->get_logger(), "添加宇树电机: %s (ID=%d, 方向=%d)",
+                config.name.c_str(), config.id, config.direction);
   }
   
   void createPublishers() {
@@ -367,7 +327,7 @@ private:
       "unitree_go8010_command", 10,
       std::bind(&MotorControlNode::unitreeGOCommandCallback, this, std::placeholders::_1)
     );
-  }
+   }
   
   void canRxCallback(const std::string& interface_name, uint32_t can_id, const uint8_t* data, size_t len) {
     // 调试日志：显示接收到的 CAN 帧（包含接口来源）
@@ -423,38 +383,52 @@ private:
       last_freq_report_time_ = now;
     }
     
-    // 1. 读取电机状态
-    readUnitreeMotors();
-    
-    // 2. 更新 DJI 电机控制器（PID 计算）
+    // 1. 更新 DJI 电机控制器（PID 计算）
     // 与 Python 实现一致，不传递 dt 参数
     for (auto& motor : dji_motors_) {
       motor->updateController();
     }
     
-    // 3. 写入电机命令
+    // 2. 写入电机命令（宇树电机协议：先发送命令，电机才会返回反馈）
     writeDJIMotors();
     writeDamiaoMotors();
-    writeUnitreeMotors();
     
-    // 4. 发布电机状态（每次控制循环都发布）
+    // 3. 对于宇树电机，使用官方 SDK 的 sendRecv（原子性的 send-receive）
+    writeUnitreeMotors();
+    // 宇树电机调试日志
+   
+    
+    // 5. 发布电机状态（每次控制循环都发布）
     publishStates();
   }
 
   void readUnitreeMotors() {
     for (auto& motor : unitree_motors_) {
-      motor->receiveFeedback();
+      motor->sendRecv();
     }
   }
 
   void writeUnitreeMotors() {
     for (auto& motor : unitree_motors_) {
-      motor->sendCommand();
+      motor->sendRecv();
+    }
+    static int unitree_debug_count = 0;
+    if (++unitree_debug_count % 100 == 0) {
+      for (auto& motor : unitree_motors_) {
+        RCLCPP_INFO(this->get_logger(), "[UnitreeDebug] %s: Pos=%.3f Vel=%.3f Tor=%.3f Tmp=%d°C Online=%d",
+                    motor->getJointName().c_str(),
+                    motor->getOutputPosition(),
+                    motor->getOutputVelocity(),
+                    motor->getOutputTorque(),
+                    (int)motor->getTemperature(),
+                    motor->isOnline());
+      }
     }
   }
   
   void writeDJIMotors() {
-    if (dji_motors_.empty()) return;
+    if (dji_motors_.empty()) 
+    {return;}
     
     // 发送频率统计
     static int tx_count = 0;
@@ -626,7 +600,7 @@ private:
     freq_msg.target_frequency = target_control_freq_;
     control_freq_pub_->publish(freq_msg);
   }
-  
+
   void djiCommandCallback(const motor_control_ros2::msg::DJIMotorCommand::SharedPtr msg) {
     RCLCPP_INFO(this->get_logger(), 
                 "[CMD] 收到 DJI 命令: joint='%s', output=%d",
@@ -663,8 +637,6 @@ private:
       auto motor = std::dynamic_pointer_cast<UnitreeMotor>(it->second);
       if (motor) {
         motor->setHybridCommand(msg->pos_des, msg->vel_des, msg->kp, msg->kd, msg->torque_ff);
-        if (msg->mode == 10) motor->enable();
-        else if (msg->mode == 0) motor->disable();
       }
     }
   }
@@ -675,8 +647,6 @@ private:
       auto motor = std::dynamic_pointer_cast<UnitreeMotor>(it->second);
       if (motor) {
         motor->setHybridCommand(msg->pos_des, msg->vel_des, msg->kp, msg->kd, msg->torque_ff);
-         if (msg->mode == 10) motor->enable();
-        else if (msg->mode == 0) motor->disable();
       }
     }
   }
@@ -768,7 +738,7 @@ private:
     
     // 加载每种电机类型的默认参数
     std::map<std::string, std::pair<PIDParams, PIDParams>> type_params;
-    
+     
     for (auto type_node : config["dji_motors"]) {
       std::string motor_type = type_node.first.as<std::string>();
       
@@ -881,7 +851,7 @@ private:
   rclcpp::Subscription<motor_control_ros2::msg::UnitreeMotorCommand>::SharedPtr unitree_cmd_sub_;
   rclcpp::Subscription<motor_control_ros2::msg::UnitreeGO8010Command>::SharedPtr unitree_go_cmd_sub_;
 
-  std::map<std::string, std::shared_ptr<hardware::SerialInterface>> serial_ports_;
+  std::map<std::string, std::shared_ptr<SerialPort>> serial_ports_;
   std::vector<std::shared_ptr<UnitreeMotor>> unitree_motors_;
   
   // 配置相关

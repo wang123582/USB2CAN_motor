@@ -3,7 +3,7 @@
 
 # CAN 接口配置
 can_interfaces:
-  - device: /dev/ttyACM0
+  - device: /dev/ttyACM1
     baudrate: 921600
     motors:
       # 左前舵轮单元
@@ -27,7 +27,7 @@ can_interfaces:
         type: GM6020
         id: 4
   
-  - device: /dev/ttyACM1
+  - device: /dev/ttyACM0
     baudrate: 921600
     motors:
       - name: DJI3508_1          # 左前驱动电机
@@ -58,32 +58,15 @@ can_interfaces:
 
 # 串口接口配置（宇树电机）
 serial_interfaces:
-  # 串口接口 1
-  # - device: /dev/ttyUSB0
-  #   baudrate: 4000000
-  #   motors:
-  #     # 宇树 A1 电机示例
-  #     - name: fl_hip_motor     # 电机名称
-  #       type: A1               # 电机类型: A1, GO8010
-  #       id: 0                  # 电机 ID
-  #       direction: 1           # 方向: 1 或 -1
-  #       offset: 0.0            # 零点偏移（弧度）
-  #     
-  #     - name: fl_knee_motor
-  #       type: A1
-  #       id: 1
-  #       direction: 1
-  #       offset: 0.0
-  
-  # 串口接口 2 (如果有多个 USB-485 适配器)
-  # - device: /dev/ttyUSB1
-  #   baudrate: 4000000
-  #   motors:
-  #     - name: fr_hip_motor
-  #       type: GO8010
-  #       id: 0
-  #       direction: 1
-  #       offset: 0.0
+  # 串口接口 1 - GO-8010 @ 4Mbps
+  - device: /dev/ttyUSB0
+    baudrate: 4000000
+    motors:
+      - name: fl_hip_motor     # 电机名称
+        type: GO8010           # 电机类型: A1, GO8010
+        id: 0                  # 电机 ID
+        direction: 1           # 方向: 1 或 -1
+        offset: 0.0            # 零点偏移（弧度）
 
 # 配置说明:
 # 1. 取消注释需要使用的接口和电机

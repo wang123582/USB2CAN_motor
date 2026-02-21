@@ -65,6 +65,11 @@ public:
   bool isOpen() const { return fd_ >= 0; }
   
   /**
+   * @brief 获取端口名称
+   */
+  std::string getPortName() const { return port_name_; }
+  
+  /**
    * @brief 发送数据
    * @param data 数据指针
    * @param len 数据长度
@@ -78,10 +83,26 @@ public:
    * @param max_len 最大接收长度
    * @return 实际接收的字节数，-1 表示错误
    */
-  ssize_t receive(uint8_t* buffer, size_t max_len);
-  
-  /**
-   * @brief 设置接收回调
+   ssize_t receive(uint8_t* buffer, size_t max_len);
+   
+   /**
+    * @brief 发送并接收（原子操作，匹配官方 SDK）
+    * @param send_data 发送数据
+    * @param send_len 发送数据长度
+    * @param recv_buffer 接收缓冲区
+    * @param recv_len 接收数据长度
+    * @return 成功返回 true
+    */
+   bool sendRecv(const uint8_t* send_data, size_t send_len, uint8_t* recv_buffer, size_t recv_len);
+   
+   /**
+    * @brief 设置 RS485 方向控制
+    * @param tx_mode true=发送模式, false=接收模式
+    */
+   void setRs485Direction(bool tx_mode);
+   
+   /**
+    * @brief 设置接收回调
    * @param callback 回调函数
    */
   void setRxCallback(SerialRxCallback callback);
@@ -96,22 +117,28 @@ public:
    */
   void stopRxThread();
   
-  /**
-   * @brief 获取统计信息
-   */
-  struct Statistics {
-    uint64_t tx_bytes;       // 发送字节数
-    uint64_t rx_bytes;       // 接收字节数
-    uint64_t tx_errors;      // 发送错误
-    uint64_t rx_errors;      // 接收错误
-  };
-  
-  Statistics getStatistics() const { return stats_; }
-  void resetStatistics();
-
+   /**
+    * @brief 获取统计信息
+    */
+   struct Statistics {
+     uint64_t tx_bytes;       // 发送字节数
+     uint64_t rx_bytes;       // 接收字节数
+     uint64_t tx_errors;      // 发送错误
+     uint64_t rx_errors;      // 接收错误
+   };
+   
+   Statistics getStatistics() const { return stats_; }
+   void resetStatistics();
+   
+   /**
+    * @brief 获取文件描述符
+    */
+   int getFd() const { return fd_; }
+   
 private:
   // 串口配置
   std::string port_;
+  std::string port_name_;  // 保存端口名用于官方库
   int baudrate_;
   int fd_;  // 文件描述符
   
