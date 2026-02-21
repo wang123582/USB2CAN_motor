@@ -106,5 +106,5 @@ public:
    
 private:
     int fd_;
-    
-};
+}; 
+}

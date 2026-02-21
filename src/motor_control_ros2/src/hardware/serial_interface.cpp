@@ -2,6 +2,10 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
+#include <linux/serial.h>
+#include <errno.h>
 #include <cstring>
 #include <iostream>
 #include <chrono>
@@ -13,6 +17,7 @@ namespace hardware {
 
 SerialInterface::SerialInterface(const std::string& port, int baudrate)
   : port_(port)
+  , port_name_(port)
   , baudrate_(baudrate)
   , fd_(-1)
   , rx_running_(false)
@@ -104,8 +109,12 @@ bool SerialInterface::open() {
     return false;
   }
   
-  // 清空缓冲区
-  tcflush(fd_, TCIOFLUSH);
+   // 清空缓冲区
+   tcflush(fd_, TCIOFLUSH);
+   
+   // 暂不配置 RS485 自动方向控制（与官方 SDK 一致）
+   // 如果需要硬件流控，可以在发送后手动切换方向
+   std::cout << "[SerialInterface] RS485 方向控制: 软件管理 (与官方 SDK 一致)" << std::endl;
   
   std::cout << "[SerialInterface] 成功打开串口: " << port_ 
             << " @ " << baudrate_ << " bps" << std::endl;
@@ -138,22 +147,66 @@ ssize_t SerialInterface::send(const uint8_t* data, size_t len) {
   return n;
 }
 
+void SerialInterface::setRs485Direction(bool tx_mode) {
+  if (fd_ < 0) return;
+  int level = tx_mode ? TIOCM_RTS : 0;
+  ioctl(fd_, TIOCMSET, &level);
+}
+
 ssize_t SerialInterface::receive(uint8_t* buffer, size_t max_len) {
   if (fd_ < 0) {
     return -1;
   }
   
-  ssize_t n = read(fd_, buffer, max_len);
+  // 使用 select 等待数据，超时时间为 20ms（宇树电机通常在 1-5ms 内返回反馈，但留有余量）
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(fd_, &readfds);
   
-  if (n > 0) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
-    stats_.rx_bytes += n;
-  } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
-    stats_.rx_errors++;
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 20000;  // 20ms 超时（从 10ms 增加）
+  
+  int select_result = select(fd_ + 1, &readfds, NULL, NULL, &tv);
+  
+  if (select_result <= 0) {
+    // 超时或错误
+    if (select_result < 0 && errno != EINTR) {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      stats_.rx_errors++;
+    }
+    return 0;  // 超时返回 0 而不是 -1
   }
   
-  return n;
+  if (FD_ISSET(fd_, &readfds)) {
+    ssize_t n = read(fd_, buffer, max_len);
+    
+    if (n > 0) {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      stats_.rx_bytes += n;
+    } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      stats_.rx_errors++;
+    }
+    
+    return n;
+  }
+  
+  return 0;
+}
+
+bool SerialInterface::sendRecv(const uint8_t* send_data, size_t send_len, uint8_t* recv_buffer, size_t recv_len) {
+  if (fd_ < 0) return false;
+  
+  // 发送
+  ssize_t n = send(send_data, send_len);
+  if (n != (ssize_t)send_len) {
+    return false;
+  }
+  
+  // 接收
+  ssize_t r = receive(recv_buffer, recv_len);
+  return (r > 0);
 }
 
 void SerialInterface::setRxCallback(SerialRxCallback callback) {

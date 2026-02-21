@@ -20,10 +20,13 @@ find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
 
-# 宇树官方 SDK 路径
+# ================== 宇树官方 SDK 路径设置 ==================
 set(UNITREE_SDK_PATH "/home/toe/unitree_actuator_sdk")
 set(UNITREE_SDK_INCLUDE "${UNITREE_SDK_PATH}/include")
-set(UNITREE_SDK_LIB "${UNITREE_SDK_PATH}/lib/libUnitreeMotorSDK_Linux64.so")
+# 分离出库目录，用于 RPATH 设置
+set(UNITREE_SDK_LIB_DIR "${UNITREE_SDK_PATH}/lib") 
+set(UNITREE_SDK_LIB "${UNITREE_SDK_LIB_DIR}/libUnitreeMotorSDK_Linux64.so")
+# ========================================================
 
 # 消息生成（不再使用服务）
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -53,6 +56,7 @@ add_library(motor_control_lib
   # 硬件层
   src/hardware/can_interface.cpp
   src/hardware/serial_interface.cpp
+  src/hardware/unitree_sdk_wrapper.cpp
   src/hardware/hardware_manager.cpp
   # 电机驱动层
   src/dji_motor.cpp
@@ -75,16 +79,33 @@ ament_target_dependencies(motor_control_lib
 # 导出库接口
 rosidl_get_typesupport_target(cpp_typesupport_target
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(motor_control_lib "${cpp_typesupport_target}" yaml-cpp)
+target_link_libraries(motor_control_lib 
+  "${cpp_typesupport_target}" 
+  yaml-cpp
+  ${UNITREE_SDK_LIB}
+)
+
+# 添加宇树 SDK 的包含路径
+target_include_directories(motor_control_lib 
+  PUBLIC 
+  ${UNITREE_SDK_INCLUDE}
+)
+
+# 设置 RPATH (修正：使用目录变量，而非文件变量)
+set_target_properties(motor_control_lib PROPERTIES
+  BUILD_RPATH "${UNITREE_SDK_LIB_DIR}"
+  INSTALL_RPATH "$ORIGIN"
+)
 
 # C++ 可执行文件 - 实时控制节点
 add_executable(motor_control_node
   src/motor_control_node.cpp
 )
 
-# 链接核心库
+# 链接核心库和 SDK
 target_link_libraries(motor_control_node
   motor_control_lib
+  ${UNITREE_SDK_LIB}
 )
 
 ament_target_dependencies(motor_control_node
@@ -94,14 +115,28 @@ ament_target_dependencies(motor_control_node
   ament_index_cpp
 )
 
+# 设置 RPATH (修正：使用目录变量)
+set_target_properties(motor_control_node PROPERTIES
+  BUILD_RPATH "${UNITREE_SDK_LIB_DIR}"
+  INSTALL_RPATH "$ORIGIN"
+)
+
 # C++ 可执行文件 - 电机监控节点
 add_executable(motor_monitor_node
   src/motor_monitor_node.cpp
 )
 
-# 链接消息类型支持
+# 链接核心库和 SDK
 target_link_libraries(motor_monitor_node
+  motor_control_lib
+  ${UNITREE_SDK_LIB}
   "${cpp_typesupport_target}"
+)
+
+# 设置 RPATH (修正：使用目录变量)
+set_target_properties(motor_monitor_node PROPERTIES
+  BUILD_RPATH "${UNITREE_SDK_LIB_DIR}"
+  INSTALL_RPATH "$ORIGIN"
 )
 
 ament_target_dependencies(motor_monitor_node
@@ -115,9 +150,16 @@ add_executable(chassis_control_node
   src/chassis_control_node.cpp
 )
 
-# 链接核心库
+# 链接核心库和 SDK
 target_link_libraries(chassis_control_node
   motor_control_lib
+  ${UNITREE_SDK_LIB}
+)
+
+# 设置 RPATH (修正：使用目录变量)
+set_target_properties(chassis_control_node PROPERTIES
+  BUILD_RPATH "${UNITREE_SDK_LIB_DIR}"
+  INSTALL_RPATH "$ORIGIN"
 )
 
 ament_target_dependencies(chassis_control_node
@@ -132,9 +174,16 @@ add_executable(omni_chassis_control_node
   src/omni_chassis_control_node.cpp
 )
 
-# 链接核心库
+# 链接核心库和 SDK
 target_link_libraries(omni_chassis_control_node
   motor_control_lib
+  ${UNITREE_SDK_LIB}
+)
+
+# 设置 RPATH (修正：使用目录变量)
+set_target_properties(omni_chassis_control_node PROPERTIES
+  BUILD_RPATH "${UNITREE_SDK_LIB_DIR}"
+  INSTALL_RPATH "$ORIGIN"
 )
 
 ament_target_dependencies(omni_chassis_control_node
@@ -176,6 +225,13 @@ install(TARGETS
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+# ================== 安装宇树 SDK 库文件 ==================
+# 将官方 .so 复制到 install/lib 下，这样运行时无需设置 LD_LIBRARY_PATH
+install(FILES ${UNITREE_SDK_LIB}
+  DESTINATION lib
+)
+# ========================================================
 
 # 安装头文件
 install(DIRECTORY include/
