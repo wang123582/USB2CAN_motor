@@ -72,6 +72,39 @@ serial_interfaces:
         gear_ratio: 6.33       # 齿轮减速比
         k_pos: 0.20            # 默认关节刚度系数 (0-1.0)
         k_spd: 0.04            # 默认关节阻尼系数 (0-1.0)
+  
+  # 串口接口 2 - 击球系统（4个宇树 GO-8010，冗余驱动）
+  - device: /dev/ttyUSB1
+    baudrate: 4000000
+    motors:
+      # 左臂电机1
+      - name: strike_motor_L1
+        type: GO8010
+        id: 0
+        direction: 1
+        offset: 0.0
+      
+      # 左臂电机2
+      - name: strike_motor_L2
+        type: GO8010
+        id: 1
+        direction: 1
+        offset: 0.0
+      
+      # 右臂电机1
+      - name: strike_motor_R1
+        type: GO8010
+        id: 2
+        direction: 1
+        offset: 0.0
+      
+      # 右臂电机2
+      - name: strike_motor_R2
+        type: GO8010
+        id: 3
+        direction: 1
+        offset: 0.0
+
 
 # 配置说明:
 # 1. 取消注释需要使用的接口和电机
