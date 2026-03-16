@@ -2,6 +2,7 @@ std_msgs/Header header
 
 uint8 id                       # 电机 ID (0-15)
 string device                  # 串口设备路径（如 /dev/ttyUSB0），为空时广播到所有同 ID 电机
+string joint_name              # 电机关节名称（如 arm_motor_1），非空时按名称精确匹配，忽略 id/device
 
 # 控制模式
 uint8 MODE_BRAKE = 0       # 刹车模式

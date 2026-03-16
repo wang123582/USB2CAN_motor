@@ -279,7 +279,8 @@ void DeltaArmManager::publishCommand(size_t idx,
 {
   auto cmd = motor_control_ros2::msg::UnitreeGO8010Command();
   cmd.header.stamp = this->now();
-  cmd.id = motor_ids_[idx];  // motor_control_node 通过 id 路由命令
+  cmd.joint_name = motor_names_[idx];  // 按名称精确路由，避免多串口同 ID 歧义
+  cmd.id = motor_ids_[idx];
   cmd.mode = motor_control_ros2::msg::UnitreeGO8010Command::MODE_FOC;
   cmd.position_target = pos_des;
   cmd.velocity_target = vel_des;

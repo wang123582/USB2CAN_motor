@@ -35,10 +35,12 @@ safety:
 position_tolerance: 0.05
 
 # 电机名称与 ID（对应 motors.yaml 中的 joint_name）
+# 注意：id 应与 motors.yaml 中的硬件 ID 一致（同一总线上的不同电机需不同 ID，
+#       不同串口上的电机可使用相同 ID）。命令路由优先使用 joint_name 精确匹配。
 motors:
   - name: "arm_motor_1"
     id: 0
   - name: "arm_motor_2"
-    id: 1
+    id: 0
   - name: "arm_motor_3"
-    id: 2
+    id: 0

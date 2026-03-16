@@ -667,22 +667,33 @@ private:
   }
 
   void unitreeGOCommandCallback(const motor_control_ros2::msg::UnitreeGO8010Command::SharedPtr msg) {
-    // 按 ID（和可选的 device）在原生宇树电机列表中查找
+    // 查找目标电机：优先按 joint_name 精确匹配，否则按 id+device
     std::vector<std::shared_ptr<UnitreeMotorNative>> matched_motors;
-    for (auto& m : unitree_native_motors_) {
-      if (m->getMotorId() == msg->id) {
-        // 如果指定了 device，只匹配该设备上的电机
-        if (!msg->device.empty() && m->getDevicePath() != msg->device) {
-          continue;
+
+    if (!msg->joint_name.empty()) {
+      // 按 joint_name 精确匹配（推荐方式，避免多串口同 ID 歧义）
+      for (auto& m : unitree_native_motors_) {
+        if (m->getJointName() == msg->joint_name) {
+          matched_motors.push_back(m);
+          break;  // joint_name 唯一
         }
-        matched_motors.push_back(m);
+      }
+    } else {
+      // 兼容旧方式：按 ID（和可选的 device）查找
+      for (auto& m : unitree_native_motors_) {
+        if (m->getMotorId() == msg->id) {
+          if (!msg->device.empty() && m->getDevicePath() != msg->device) {
+            continue;
+          }
+          matched_motors.push_back(m);
+        }
       }
     }
 
     if (matched_motors.empty()) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                           "[CMD GO8010] 未找到电机 ID=%d device='%s'（可能该 ID 未接线或未在 motors.yaml 配置）",
-                           msg->id, msg->device.c_str());
+                           "[CMD GO8010] 未找到电机 joint_name='%s' ID=%d device='%s'",
+                           msg->joint_name.c_str(), msg->id, msg->device.c_str());
       return;
     }
 
