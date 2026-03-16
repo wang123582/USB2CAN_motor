@@ -59,8 +59,7 @@ add_library(motor_control_lib
   # 硬件层
   src/hardware/can_interface.cpp
   src/hardware/serial_interface.cpp
-  # src/hardware/unitree_sdk_wrapper.cpp  # SDK可选
-  src/hardware/hardware_manager.cpp
+ 
   # 电机驱动层
   src/dji_motor.cpp
   src/damiao_motor.cpp

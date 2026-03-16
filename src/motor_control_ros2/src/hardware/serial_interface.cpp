@@ -214,6 +214,55 @@ bool SerialInterface::sendRecv(const uint8_t* send_data, size_t send_len, uint8_
   return (r > 0);
 }
 
+ssize_t SerialInterface::sendRecvAccumulate(const uint8_t* send_data, size_t send_len,
+                                            uint8_t* recv_buffer, size_t max_len,
+                                            int wait_ms, int timeout_ms) {
+  if (fd_ < 0 || recv_buffer == nullptr || max_len == 0) {
+    return -1;
+  }
+
+  // 半双工请求-响应：发送前清理 RX 缓冲，避免读取到断电噪声/残包
+  tcflush(fd_, TCIFLUSH);
+
+  // 发送
+  ssize_t n = send(send_data, send_len);
+  if (n != static_cast<ssize_t>(send_len)) {
+    return -1;
+  }
+
+  // 等待电机准备响应
+  if (wait_ms > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+  }
+
+  // 累积接收直到超时或达到上限
+  const auto start = std::chrono::steady_clock::now();
+  size_t total = 0;
+
+  while (total < max_len) {
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+    if (elapsed_ms >= timeout_ms) {
+      break;
+    }
+
+    ssize_t r = receive(recv_buffer + total, max_len - total);
+    if (r > 0) {
+      total += static_cast<size_t>(r);
+      continue;
+    }
+
+    if (r < 0) {
+      return -1;
+    }
+
+    // r == 0: 当前轮无数据，短暂让出 CPU
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  return static_cast<ssize_t>(total);
+}
+
 void SerialInterface::setRxCallback(SerialRxCallback callback) {
   rx_callback_ = callback;
 }
