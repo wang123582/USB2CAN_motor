@@ -1,0 +1,59 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches:
+      - "**"
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      WORKSPACE_SRC_PATH: ${{ github.workspace }}/src
+      COLCON_PACKAGES_ARG: --packages-up-to motor_control_ros2
+      ROS_DISTRO: humble
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ROS 2 Humble
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-colcon-common-extensions python3-rosdep
+
+      - name: Init rosdep
+        run: |
+          sudo rosdep init || true
+          rosdep update
+
+      - name: Validate workspace layout
+        run: |
+          test -d "${WORKSPACE_SRC_PATH}" || {
+            echo "错误：工作区根目录未找到 src/ 目录"
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: rosdep install --from-paths "${WORKSPACE_SRC_PATH}" --ignore-src -r -y --rosdistro ${ROS_DISTRO}
+
+      - name: Build
+        run: |
+          source /opt/ros/${ROS_DISTRO}/setup.bash
+          colcon build --event-handlers console_cohesion+ ${COLCON_PACKAGES_ARG}
+
+      - name: Test
+        run: |
+          source /opt/ros/${ROS_DISTRO}/setup.bash
+          colcon test --event-handlers console_cohesion+ ${COLCON_PACKAGES_ARG}
+          colcon test-result --verbose
