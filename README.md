@@ -401,7 +401,7 @@ ros2 run motor_control_ros2 motor_control_node
 为降低多人协作时的架构漂移风险，仓库已提供以下 PR 自动检查：
 
 - `PR CI`：自动执行 ROS2 依赖安装、`colcon build`、`colcon test`
-- `PR Title Check`：强制 PR 标题使用规范前缀（`feat/fix/docs/refactor/test/chore/ci`）
+- `PR Title Check`：强制 PR 标题使用规范前缀（`feat/fix/docs/refactor/test/chore/ci`），格式为 `<type>: <description>`（例如 `feat: add chassis control`）
 - `CodeQL`：自动执行 C++/Python 安全扫描
 - `CODEOWNERS`：核心目录改动默认请求代码所有者评审
 - `pull_request_template.md`：统一 PR 描述与自检清单
