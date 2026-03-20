@@ -158,6 +158,8 @@ jobs:
                 /create or update \bworkflow\b .* without `?\bworkflows\b`? permission/i.test(message)
               )
             }
+            const isUnstableMergeabilityError = (error) =>
+              /pull request is in unstable status/i.test(formatError(error))
             const forkWorkflowApprovalStatuses = new Set(['action_required', 'requested', 'waiting', 'pending'])
             const forkWorkflowSensitivePrefixes = ['.github/workflows/', '.github/actions/']
             const approvedWorkflowRunIds = new Set()
@@ -430,18 +432,42 @@ jobs:
                 if (pullRequest.autoMergeRequest) {
                   automationLines.push('- Squash auto-merge：已启用')
                 } else {
-                  await github.graphql(
-                    `mutation($pullRequestId: ID!) {
-                      enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
-                        pullRequest {
-                          number
-                        }
+                  let autoMergeEnabled = false
+                  let lastAutoMergeError = null
+
+                  for (let attempt = 1; attempt <= 3; attempt += 1) {
+                    try {
+                      await github.graphql(
+                        `mutation($pullRequestId: ID!) {
+                          enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
+                            pullRequest {
+                              number
+                            }
+                          }
+                        }`,
+                        {
+                          pullRequestId: pullRequest.id,
+                        },
+                      )
+                      autoMergeEnabled = true
+                      break
+                    } catch (error) {
+                      if (!isUnstableMergeabilityError(error) || attempt === 3) {
+                        throw error
                       }
-                    }`,
-                    {
-                      pullRequestId: pullRequest.id,
-                    },
-                  )
+
+                      lastAutoMergeError = error
+                      core.info(
+                        `Pull request #${pullNumber} is still unstable for auto-merge (attempt ${attempt}/3). Waiting 10 seconds before retrying.`,
+                      )
+                      await sleep(10000)
+                    }
+                  }
+
+                  if (!autoMergeEnabled && lastAutoMergeError) {
+                    throw lastAutoMergeError
+                  }
+
                   automationLines.push('- Squash auto-merge：已启用')
                 }
               } catch (error) {
