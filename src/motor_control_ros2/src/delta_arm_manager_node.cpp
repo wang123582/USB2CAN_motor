@@ -20,8 +20,7 @@ DeltaArmManager::DeltaArmManager()
       planned_delta_rad_(0.0),
       landing_stability_started_(false),
       ready_published_(false),
-      gravity_compensation_torque_(0.0),
-      feedback_received_count_(0)
+      gravity_compensation_torque_(0.0)
 {
   current_positions_.fill(0.0);
   current_velocities_.fill(0.0);
@@ -153,7 +152,7 @@ void DeltaArmManager::armTargetCallback(
       all_feedback_ready = false;
       break;
     }
-  }
+  }//判断电机是否在线且反馈就绪，未就绪则拒绝执行命令
   if (!all_feedback_ready) {
     RCLCPP_WARN(this->get_logger(), "收到目标命令但电机反馈未就绪，拒绝执行");
     return;
@@ -288,7 +287,8 @@ void DeltaArmManager::controlLoop()
       if (!ready_published_) {
         publishReady();
       }
-      // 在 READY 阶段保持解耦零点（target_delta=0）+ 重力补偿前馈
+      /*  在 READY 阶段保持解耦零点（target_delta=0）+ 重力补偿前馈
+        且每次执行完后会主动回到零点    */
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, gravity_compensation_torque_, kp_, kd_);
       }

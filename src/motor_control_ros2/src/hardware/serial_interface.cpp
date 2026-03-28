@@ -112,9 +112,7 @@ bool SerialInterface::open() {
    // 清空缓冲区
    tcflush(fd_, TCIOFLUSH);
    
-   // 暂不配置 RS485 自动方向控制（与官方 SDK 一致）
-   // 如果需要硬件流控，可以在发送后手动切换方向
-   std::cout << "[SerialInterface] RS485 方向控制: 软件管理 (与官方 SDK 一致)" << std::endl;
+  
   
   std::cout << "[SerialInterface] 成功打开串口: " << port_ 
             << " @ " << baudrate_ << " bps" << std::endl;

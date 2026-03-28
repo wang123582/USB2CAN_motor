@@ -20,14 +20,10 @@ initialization:
   landing_kd: 0.05
 
   # 重力补偿前馈力矩（Nm，转子侧）
-  # 正值=向上抵抗重力，用户根据实际负载自行调试
-  # 建议从 0.05 开始逐步增大，直到 READY 状态电机不下沉
   gravity_compensation_torque: 0.30
 
 # PD 控制参数（EXECUTE 阶段位置控制）
 # 注意：kp/kd 作用于电机转子侧，输出端力矩 = τ_rotor × 减速比 6.33
-# kp=0.35: 0.3rad 误差 → 0.35×0.3×6.33 = 0.66 Nm（足够克服重力）
-# kd=0.10: 阻尼比 kd/kp = 0.286，充分抑制振荡
 pd:
   kp: 0.50
   kd: 0.20

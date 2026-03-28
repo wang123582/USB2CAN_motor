@@ -31,7 +31,6 @@ public:
 private:
   // ========== 状态机 ==========
   enum class State {
-    WAIT_FEEDBACK,  // 新增：等待电机首帧反馈，不发任何命令
     INIT,
     SOFT_LANDING,
     READY,
@@ -95,7 +94,6 @@ private:
   bool ready_published_;
 
   double gravity_compensation_torque_;  // 重力补偿前馈力矩（用户自行调试）
-  int feedback_received_count_;
 };
 
 #endif  // MOTOR_CONTROL_ROS2__DELTA_ARM_MANAGER_NODE_HPP_
