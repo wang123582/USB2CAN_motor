@@ -18,6 +18,9 @@ DeltaArmManager::DeltaArmManager()
       state_(State::INIT),
       target_delta_rad_(0.0),
       planned_delta_rad_(0.0),
+      current_planned_vel_(0.0),
+      max_acceleration_(15.0),
+      planner_p_gain_(8.0),
       landing_stability_started_(false),
       ready_published_(false),
       gravity_compensation_torque_(0.0)
@@ -100,8 +103,10 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
   }
 
   auto mp = cfg["motion_profile"];
-  if (mp && mp["max_velocity"]) {
-    max_velocity_ = mp["max_velocity"].as<double>();
+  if (mp) {
+    if (mp["max_velocity"])     max_velocity_     = mp["max_velocity"].as<double>();
+    if (mp["max_acceleration"]) max_acceleration_ = mp["max_acceleration"].as<double>();
+    if (mp["planner_p_gain"])   planner_p_gain_   = mp["planner_p_gain"].as<double>();
   }
 
   auto motors = cfg["motors"];
@@ -133,8 +138,8 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
   }
 
   RCLCPP_INFO(this->get_logger(),
-      "配置加载完成: kp=%.2f kd=%.2f max_vel=%.2f landing_torque=%.2f gravity_comp=%.3f",
-      kp_, kd_, max_velocity_, downward_torque_, gravity_compensation_torque_);
+      "配置加载完成: kp=%.2f kd=%.2f max_vel=%.2f max_accel=%.1f p_gain=%.1f landing_torque=%.2f gravity_comp=%.3f",
+      kp_, kd_, max_velocity_, max_acceleration_, planner_p_gain_, downward_torque_, gravity_compensation_torque_);
 }
 
 // ========== 回调 ==========
@@ -202,6 +207,7 @@ void DeltaArmManager::armTargetCallback(
         target_delta_rad_);
   } else {
     planned_delta_rad_ = 0.0;  // READY/INIT/SOFT_LANDING 进入 EXECUTE 时从零点起步
+    current_planned_vel_ = 0.0;  // 从零速开始加速
     state_ = State::EXECUTE;
     RCLCPP_INFO(this->get_logger(),
         "READY → EXECUTE: 目标相对增量 %.3f rad（3路一致）",
@@ -309,15 +315,26 @@ void DeltaArmManager::controlLoop()
         }
       }
 
-      // 梯形速度规划：仅当电机跟得上时推进规划器
-      double step = 0.0;
+      // 平滑轨迹生成：限加速度 + P减速
       if (tracking_ok) {
-        double max_step = max_velocity_ * dt;
         double err = target_delta_rad_ - planned_delta_rad_;
-        step = std::clamp(err, -max_step, max_step);
-        planned_delta_rad_ += step;
+        // P 控制器：距目标越近，期望速度越小
+        double target_vel = err * planner_p_gain_;
+        target_vel = std::clamp(target_vel, -max_velocity_, max_velocity_);
+        // 限加速度
+        double max_dv = max_acceleration_ * dt;
+        if (target_vel > current_planned_vel_ + max_dv) {
+          current_planned_vel_ += max_dv;
+        } else if (target_vel < current_planned_vel_ - max_dv) {
+          current_planned_vel_ -= max_dv;
+        } else {
+          current_planned_vel_ = target_vel;
+        }
+        planned_delta_rad_ += current_planned_vel_ * dt;
+      } else {
+        current_planned_vel_ = 0.0;  // 暂停→安全清零
       }
-      double vel_ff = (dt > 1e-9) ? (step / dt) : 0.0;
+      double vel_ff = current_planned_vel_;
 
       for (size_t i = 0; i < 3; ++i) {
         const double physical_target = zero_positions_[i] + planned_delta_rad_;
@@ -327,6 +344,7 @@ void DeltaArmManager::controlLoop()
       if (allMotorsReached()) {
         RCLCPP_INFO(this->get_logger(), "目标到达，EXECUTE → READY");
         state_ = State::READY;
+        current_planned_vel_ = 0.0;  // 到达后规划速度清零
         ready_published_ = false;  // 重新触发一次 READY 发布
       }
       break;

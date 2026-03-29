@@ -208,6 +208,7 @@ add_executable(remote_control_node
 # 链接消息类型支持
 target_link_libraries(remote_control_node
   "${cpp_typesupport_target}"
+  yaml-cpp
 )
 
 ament_target_dependencies(remote_control_node

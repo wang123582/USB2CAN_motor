@@ -23,7 +23,16 @@ remote_control_node:
     button_speed_up: 5       # 加速按钮 (RB)
     button_speed_down: 4     # 减速按钮 (LB)
     button_stop: 6           # 紧急停止按钮 (Back)
-    
+
+    # delta_arm 扳机控制
+    arm_trigger_axis: 5              # RT
+    arm_trigger_threshold: 0.15      # 触发阈值（归一化后）
+    arm_trigger_reset_threshold: 0.05  # 回位阈值（归一化后）
+    arm_min_angle_rad: 0.0
+    arm_max_angle_rad: 1.268
+    arm_protection_press_limit: 3
+    arm_protection_window_sec: 2.0
+
     # 速度限制参数
     max_linear_velocity: 10.0     # 最大线速度 (m/s)
     max_angular_velocity: 3.14   # 最大角速度 (rad/s)

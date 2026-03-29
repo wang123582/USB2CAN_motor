@@ -32,7 +32,11 @@ pd:
 motion_profile:
   # 每帧最大速度增量（rad/s，控制 pos_next = pos_now + clamp(err, ±max_velocity*dt)）
   # 0.8 rad/s：1.20 rad 目标需 1.5s 到达，给电机充足跟踪时间
-  max_velocity: 0.8
+  max_velocity: 10
+  # 最大加速度（rad/s²）：限制 vel_ff 的变化率，消除起步/停车阶跃
+  max_acceleration: 50
+  # 减速段比例增益：距目标 max_velocity/planner_p_gain rad 时开始减速
+  planner_p_gain: 15
 
 # 安全参数
 safety:
@@ -48,7 +52,8 @@ position_tolerance: 0.05
 
 # 自适应规划：当电机实际位置与规划位置差超过此值时暂停规划器
 # 防止规划器跑在电机前面太远
-tracking_error_pause: 0.2
+tracking_error_pause: 3.0
+
 
 # 解耦控制零点（固定 0 rad）：软着陆完成瞬间将当前物理角锁定为零点
 # 后续控制全部采用相对增量，且三电机增量应保持一致

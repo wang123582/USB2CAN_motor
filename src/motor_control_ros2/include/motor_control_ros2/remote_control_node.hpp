@@ -4,6 +4,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <sensor_msgs/msg/joy.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <yaml-cpp/yaml.h>
+#include "motor_control_ros2/msg/arm_target.hpp"
 #include <memory>
 
 namespace motor_control {
@@ -53,10 +56,16 @@ private:
      * @return 缩放因子 [0, 1]
      */
     double getSpeedScaleFactor();
+    double normalizeTrigger(double raw_value) const;
+    void readyCallback(const std_msgs::msg::String::SharedPtr msg);
+    void updateArmControl(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void loadRemoteControlParams(const std::string& config_file);
 
     // ROS 接口
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr arm_ready_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+    rclcpp::Publisher<motor_control_ros2::msg::ArmTarget>::SharedPtr arm_target_pub_;
 
     // 配置参数
     struct Config {
@@ -69,6 +78,15 @@ private:
         int button_speed_up = 5;     // 加速按钮（RB）
         int button_speed_down = 4;   // 减速按钮（LB）
         int button_stop = 6;         // 停止按钮（Back）
+
+        // delta arm 扳机控制
+        int arm_trigger_axis = 5;             // RT
+        double arm_trigger_threshold = 0.15;  // 触发阈值（归一化后）
+        double arm_trigger_reset_threshold = 0.05;  // 回位阈值（归一化后）
+        double arm_min_angle_rad = 0.0;
+        double arm_max_angle_rad = 0.5;
+        int arm_protection_press_limit = 3;
+        double arm_protection_window_sec = 2.0;
 
         // 速度限制（m/s 和 rad/s）
         double max_linear_velocity = 10.0;    // 最大线速度
@@ -85,11 +103,22 @@ private:
         double publish_frequency = 50.0;     // Hz
     } config_;
 
+    enum class ArmTriggerState {
+        IDLE,
+        COMMAND_SENT,
+        WAIT_TRIGGER_RESET,
+        PROTECTED
+    };
+
     // 状态
     double current_speed_scale_ = 1.0;  // 当前速度缩放因子 [0, 10.0]，即 0
     geometry_msgs::msg::Twist last_cmd_;  // 上一条命令
     rclcpp::TimerBase::SharedPtr publish_timer_;  // 定时发布定时器
-    
+    ArmTriggerState arm_trigger_state_ = ArmTriggerState::IDLE;
+    bool arm_ready_ = true;
+    int arm_press_count_ = 0;
+    rclcpp::Time last_arm_press_time_;
+
     // 按钮状态记录（用于检测按下事件）
     bool last_button_speed_up_ = false;      // 上一帧加速按钮状态
     bool last_button_speed_down_ = false;    // 上一帧减速按钮状态

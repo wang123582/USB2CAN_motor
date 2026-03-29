@@ -87,6 +87,9 @@ private:
 
   double target_delta_rad_;                    // EXECUTE 目标增量（相对零点）
   double planned_delta_rad_;                   // 梯形规划增量（相对零点）
+  double current_planned_vel_;                 // 规划器当前速度（限加速度用）
+  double max_acceleration_;                    // 最大加速度 (rad/s²)
+  double planner_p_gain_;                      // 减速段比例增益
 
   rclcpp::Time landing_stable_since_;
   rclcpp::Time init_start_time_;
