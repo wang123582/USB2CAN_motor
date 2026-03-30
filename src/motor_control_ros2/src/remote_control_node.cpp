@@ -158,37 +158,6 @@ double RemoteControlNode::getSpeedScaleFactor() {
     return current_speed_scale_;
 }
 
-void RemoteControlNode::loadRemoteControlParams(const std::string& config_file) {
-    YAML::Node root = YAML::LoadFile(config_file);
-    YAML::Node params = root["remote_control_node"]["ros__parameters"];
-    if (!params) {
-        throw std::runtime_error("remote_control_node.ros__parameters 不存在");
-    }
-
-    if (params["axis_forward"]) config_.axis_forward = params["axis_forward"].as<int>();
-    if (params["axis_strafe"]) config_.axis_strafe = params["axis_strafe"].as<int>();
-    if (params["axis_rotate"]) config_.axis_rotate = params["axis_rotate"].as<int>();
-
-    if (params["button_speed_up"]) config_.button_speed_up = params["button_speed_up"].as<int>();
-    if (params["button_speed_down"]) config_.button_speed_down = params["button_speed_down"].as<int>();
-    if (params["button_stop"]) config_.button_stop = params["button_stop"].as<int>();
-
-    if (params["arm_trigger_axis"]) config_.arm_trigger_axis = params["arm_trigger_axis"].as<int>();
-    if (params["arm_trigger_threshold"]) config_.arm_trigger_threshold = params["arm_trigger_threshold"].as<double>();
-    if (params["arm_trigger_reset_threshold"]) config_.arm_trigger_reset_threshold = params["arm_trigger_reset_threshold"].as<double>();
-    if (params["arm_min_angle_rad"]) config_.arm_min_angle_rad = params["arm_min_angle_rad"].as<double>();
-    if (params["arm_max_angle_rad"]) config_.arm_max_angle_rad = params["arm_max_angle_rad"].as<double>();
-    if (params["arm_protection_press_limit"]) config_.arm_protection_press_limit = params["arm_protection_press_limit"].as<int>();
-    if (params["arm_protection_window_sec"]) config_.arm_protection_window_sec = params["arm_protection_window_sec"].as<double>();
-
-    if (params["max_linear_velocity"]) config_.max_linear_velocity = params["max_linear_velocity"].as<double>();
-    if (params["max_angular_velocity"]) config_.max_angular_velocity = params["max_angular_velocity"].as<double>();
-    if (params["default_speed_scale"]) config_.default_speed_scale = params["default_speed_scale"].as<double>();
-    if (params["speed_scale_step"]) config_.speed_scale_step = params["speed_scale_step"].as<double>();
-    if (params["deadzone"]) config_.deadzone = params["deadzone"].as<double>();
-    if (params["publish_frequency"]) config_.publish_frequency = params["publish_frequency"].as<double>();
-}
-
 double RemoteControlNode::normalizeTrigger(double raw_value) const {
     double normalized = (1.0 - raw_value) / 2.0;
     return std::clamp(normalized, 0.0, 1.0);
@@ -253,7 +222,7 @@ void RemoteControlNode::updateArmControl(const sensor_msgs::msg::Joy::SharedPtr 
     }
 
     const double angle = config_.arm_min_angle_rad +
-        (config_.arm_max_angle_rad - config_.arm_min_angle_rad);
+        (config_.arm_max_angle_rad - config_.arm_min_angle_rad) ;
 
     auto arm_msg = motor_control_ros2::msg::ArmTarget();
     arm_msg.header.stamp = this->now();
