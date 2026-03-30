@@ -20,7 +20,7 @@ initialization:
   landing_kd: 0.05
 
   # 重力补偿前馈力矩（Nm，转子侧）
-  gravity_compensation_torque: 0.30
+  gravity_compensation_torque: 0.8
 
 # PD 控制参数（EXECUTE 阶段位置控制）
 # 注意：kp/kd 作用于电机转子侧，输出端力矩 = τ_rotor × 减速比 6.33
@@ -58,6 +58,10 @@ tracking_error_pause: 3.0
 # 解耦控制零点（固定 0 rad）：软着陆完成瞬间将当前物理角锁定为零点
 # 后续控制全部采用相对增量，且三电机增量应保持一致
 decoupled_zero_rad: 0.0
+
+# EXECUTE 超时（秒）：进入 EXECUTE 后不管是否到达目标，超时即强制进入 DESCENDING
+top_idle_timeout: 1.0
+
 
 # 电机名称与 ID（对应 motors.yaml 中的 joint_name）
 motors:

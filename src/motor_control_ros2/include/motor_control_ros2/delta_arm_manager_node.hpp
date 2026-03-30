@@ -34,7 +34,8 @@ private:
     INIT,
     SOFT_LANDING,
     READY,
-    EXECUTE
+    EXECUTE,
+    DESCENDING
   };
 
   void controlLoop();
@@ -93,10 +94,12 @@ private:
 
   rclcpp::Time landing_stable_since_;
   rclcpp::Time init_start_time_;
+  rclcpp::Time execute_start_time_;  // EXECUTE 进入时间，用于超时判定
   bool landing_stability_started_;
   bool ready_published_;
 
   double gravity_compensation_torque_;  // 重力补偿前馈力矩（用户自行调试）
+  double top_idle_timeout_;             // EXECUTE 超时时间（s），超时强制进入 DESCENDING
 };
 
 #endif  // MOTOR_CONTROL_ROS2__DELTA_ARM_MANAGER_NODE_HPP_

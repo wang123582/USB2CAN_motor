@@ -29,7 +29,7 @@ remote_control_node:
     arm_trigger_threshold: 0.15      # 触发阈值（归一化后）
     arm_trigger_reset_threshold: 0.05  # 回位阈值（归一化后）
     arm_min_angle_rad: 0.0
-    arm_max_angle_rad: 1.268
+    arm_max_angle_rad: 1.200
     arm_protection_press_limit: 3
     arm_protection_window_sec: 2.0
 
