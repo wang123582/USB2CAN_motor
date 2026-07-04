@@ -13,6 +13,7 @@
 - [x] delta_arm_manager_node 导入 → tasks/delta_arm_manager_node.md
 - [x] config_fix：修复构造函数默认值 / catch 静默吞异常 / motor_ids_ 冲突 → tasks/config_fix.md
 - [x] name_routing：按 joint_name 路由 GO8010 命令，arm_config.yaml 删除冗余 device/id → tasks/config_fix.md
+- [x] retract_speedup：收拍回落提速（取消钳位 + 反向梯形规划速度前馈 + 激进 retract 参数）
 
 ---
 

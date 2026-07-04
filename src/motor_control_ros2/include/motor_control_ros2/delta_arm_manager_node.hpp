@@ -56,7 +56,7 @@ private:
   void loadConfig(const std::string& config_file);
   void publishCommand(size_t idx,
                       double pos_des, double vel_des, double torque_ff,
-                      double kp, double kd);
+                      double kp, double kd, bool bypass_clamp = false);
   void publishTiltCommand(double pos_des, double vel_des, double torque_ff,
                           double kp, double kd);
   bool allMotorsLanded() const;
@@ -130,6 +130,8 @@ private:
   double retract_kp_;
   double retract_kd_;
   double retract_torque_ff_;
+  double retract_max_velocity_;      // 收拍规划器速度上限 (rad/s)，速度优先，可高于 execute
+  double retract_max_acceleration_;  // 收拍规划器加速度上限 (rad/s²)
   double tilt_ready_angle_rad_;
   double tilt_down_angle_rad_;
   double tilt_kp_;

@@ -81,11 +81,14 @@ serve_test:
   tilt_timeout_s: 0.50
   strike_trigger_pulse_s: 0.05
 
-# 快速收拍参数：三路上抛电机直接回相对 0 度
+# 快速收拍参数：三路上抛电机反向梯形规划回相对 0 度
+# 速度优先：max_velocity/accel 可高于 execute 段；位置钳位对收拍关闭（代码内 bypass）
 retract:
-  kp: 0.80
+  kp: 1.50            # ↑ 拉回更猛（原 0.80）
   kd: 0.15
-  torque_ff: -0.3
+  torque_ff: -0.5     # ↑ 向下前馈助力回落 + 抵消重力（原 -0.3）
+  max_velocity: 15    # 收拍规划器速度上限 (rad/s)，高于 execute 的 10
+  max_acceleration: 80 # 收拍规划器加速度上限 (rad/s²)，高于 execute 的 50
 
 # 俯仰 GO8010：先给测试值，实机调试时改 down_angle_rad 和增益
 tilt:

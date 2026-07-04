@@ -32,9 +32,11 @@ DeltaArmManager::DeltaArmManager()
       retract_timeout_s_(0.30),
       tilt_timeout_s_(0.50),
       strike_trigger_pulse_s_(0.05),
-      retract_kp_(0.80),
-      retract_kd_(0.25),
-      retract_torque_ff_(0.0),
+      retract_kp_(1.50),
+      retract_kd_(0.15),
+      retract_torque_ff_(-0.5),
+      retract_max_velocity_(15.0),
+      retract_max_acceleration_(80.0),
       tilt_ready_angle_rad_(0.0),
       tilt_down_angle_rad_(1.0),
       tilt_kp_(0.50),
@@ -196,6 +198,8 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (retract["kp"]) retract_kp_ = retract["kp"].as<double>();
     if (retract["kd"]) retract_kd_ = retract["kd"].as<double>();
     if (retract["torque_ff"]) retract_torque_ff_ = retract["torque_ff"].as<double>();
+    if (retract["max_velocity"]) retract_max_velocity_ = retract["max_velocity"].as<double>();
+    if (retract["max_acceleration"]) retract_max_acceleration_ = retract["max_acceleration"].as<double>();
   }
 
   auto tilt = cfg["tilt"];
@@ -448,9 +452,25 @@ void DeltaArmManager::controlLoop()
     }
 
     case State::FAST_RETRACT: {
-      // 快速收拍：直接发布相对 0 度，不再用慢速下降规划。
+      // 快速收拍：反向梯形规划从顶点回相对 0。速度优先——用独立的高速上限，
+      // 带 velocity_target 前馈；仅在贴近零点时收速度，避免砸零点回弹。
+      // 位置钳位对收拍关闭（bypass_clamp=true），让 PD 看到完整误差、跑满力矩。
+      const double retract_max_dv = retract_max_acceleration_ * dt;
       for (size_t i = 0; i < 3; ++i) {
-        publishCommand(i, zero_positions_[i], 0.0, retract_torque_ff_, retract_kp_, retract_kd_);
+        double err = target_deltas_rad_[i] - planned_deltas_rad_[i];  // target = 0
+        double target_vel = std::clamp(err * planner_p_gain_,
+                                       -retract_max_velocity_, retract_max_velocity_);
+        if (target_vel > current_planned_vels_[i] + retract_max_dv) {
+          current_planned_vels_[i] += retract_max_dv;
+        } else if (target_vel < current_planned_vels_[i] - retract_max_dv) {
+          current_planned_vels_[i] -= retract_max_dv;
+        } else {
+          current_planned_vels_[i] = target_vel;
+        }
+        planned_deltas_rad_[i] += current_planned_vels_[i] * dt;
+        const double physical_target = zero_positions_[i] + planned_deltas_rad_[i];
+        publishCommand(i, physical_target, current_planned_vels_[i],
+                       retract_torque_ff_, retract_kp_, retract_kd_, /*bypass_clamp=*/true);
       }
       publishTiltCommand(tilt_down_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
 
@@ -616,9 +636,14 @@ void DeltaArmManager::enterFastRetract()
 {
   launch_time_ = this->now();
   state_enter_time_ = launch_time_;
-  planned_deltas_rad_.fill(0.0);
-  current_planned_vels_.fill(0.0);
-  target_deltas_rad_.fill(0.0);
+  // 反向规划器从当前物理位置（顶点）出发，规划回相对 0；速度前馈从 0 起步、按加速度上限爬升
+  for (size_t i = 0; i < 3; ++i) {
+    planned_deltas_rad_[i] = has_feedback_[i]
+        ? current_positions_[i] - zero_positions_[i]
+        : target_deltas_rad_[i];
+    current_planned_vels_[i] = 0.0;
+    target_deltas_rad_[i] = 0.0;
+  }
   state_ = State::FAST_RETRACT;
 
   RCLCPP_INFO(this->get_logger(),
@@ -637,11 +662,12 @@ void DeltaArmManager::publishReady()
 
 void DeltaArmManager::publishCommand(size_t idx,
     double pos_des, double vel_des, double torque_ff,
-    double kp, double kd)
+    double kp, double kd, bool bypass_clamp)
 {
-  // 位置误差钳位：防止大误差产生过大力矩导致振荡
+  // 位置误差钳位：防止大误差产生过大力矩导致振荡。
+  // 收拍(bypass_clamp)时关闭钳位：速度优先，让 PD 看到完整误差、跑满回落力矩。
   double clamped_pos = pos_des;
-  if (has_feedback_[idx] && max_position_error_ > 0.0) {
+  if (!bypass_clamp && has_feedback_[idx] && max_position_error_ > 0.0) {
     double error = pos_des - current_positions_[idx];
     if (std::abs(error) > max_position_error_) {
       clamped_pos = current_positions_[idx] + std::copysign(max_position_error_, error);
