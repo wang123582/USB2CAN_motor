@@ -6,7 +6,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <yaml-cpp/yaml.h>
@@ -14,10 +16,14 @@
 #include "motor_control_ros2/config_parser.hpp"
 #include "motor_control_ros2/dji_motor.hpp"
 #include "motor_control_ros2/hardware/can_interface.hpp"
+#include "motor_control_ros2/hardware/serial_interface.hpp"
+#include "motor_control_ros2/unitree_motor_native.hpp"
 #include "motor_control_ros2/msg/control_frequency.hpp"
 #include "motor_control_ros2/msg/dji_motor_command.hpp"
 #include "motor_control_ros2/msg/dji_motor_command_advanced.hpp"
 #include "motor_control_ros2/msg/dji_motor_state.hpp"
+#include "motor_control_ros2/msg/unitree_go8010_command.hpp"
+#include "motor_control_ros2/msg/unitree_go8010_state.hpp"
 
 namespace motor_control {
 
@@ -34,6 +40,7 @@ public:
     loadMotorConfig();
 
     can_network_ = std::make_shared<hardware::CANNetwork>();
+    serial_network_ = std::make_shared<hardware::SerialNetwork>();
     can_network_->setGlobalRxCallback(
       std::bind(&MotorControlNode::canRxCallback, this,
         std::placeholders::_1,
@@ -42,11 +49,15 @@ public:
         std::placeholders::_4));
 
     initializeCanInterfaces();
+    initializeSerialInterfaces();
     loadPidParams();
     can_network_->startAll();
 
     dji_state_pub_ = this->create_publisher<motor_control_ros2::msg::DJIMotorState>(
       "dji_motor_states", 10);
+    unitree_go_state_pub_ =
+      this->create_publisher<motor_control_ros2::msg::UnitreeGO8010State>(
+        "unitree_go8010_states", 10);
     control_freq_pub_ = this->create_publisher<motor_control_ros2::msg::ControlFrequency>(
       "control_frequency", 10);
 
@@ -57,6 +68,10 @@ public:
       this->create_subscription<motor_control_ros2::msg::DJIMotorCommandAdvanced>(
         "dji_motor_command_advanced", 50,
         std::bind(&MotorControlNode::djiCommandAdvancedCallback, this, std::placeholders::_1));
+    unitree_go_cmd_sub_ =
+      this->create_subscription<motor_control_ros2::msg::UnitreeGO8010Command>(
+        "unitree_go8010_command", 50,
+        std::bind(&MotorControlNode::unitreeGoCommandCallback, this, std::placeholders::_1));
 
     target_control_freq_ = this->get_parameter("control_frequency").as_double();
     command_timeout_ = this->get_parameter("command_timeout").as_double();
@@ -73,15 +88,22 @@ public:
         std::bind(&MotorControlNode::checkReconnect, this));
     }
 
+    startSerialThreads();
+
     RCLCPP_INFO(this->get_logger(),
-      "motor_control_node 启动: DJI=%zu, 目标频率=%.1fHz",
-      dji_motors_.size(), target_control_freq_);
+      "motor_control_node 启动: DJI=%zu, GO8010=%zu, 串口线程=%zu, 目标频率=%.1fHz",
+      dji_motors_.size(), unitree_native_motors_.size(),
+      serial_comm_threads_.size(), target_control_freq_);
   }
 
   ~MotorControlNode() override {
+    stopSerialThreads();
     if (can_network_) {
       can_network_->stopAll();
       can_network_->closeAll();
+    }
+    if (serial_network_) {
+      serial_network_->closeAll();
     }
   }
 
@@ -144,6 +166,21 @@ private:
     }
   }
 
+  void initializeSerialInterfaces() {
+    int interface_index = 0;
+    for (const auto& serial_config : config_.serial_interfaces) {
+      const std::string interface_name = "serial_" + std::to_string(interface_index++);
+      if (!serial_network_->addInterface(interface_name, serial_config.device, serial_config.baudrate)) {
+        RCLCPP_ERROR(this->get_logger(), "无法打开串口: %s", serial_config.device.c_str());
+        continue;
+      }
+
+      for (const auto& motor_config : serial_config.motors) {
+        addUnitreeNativeMotor(motor_config, interface_name, serial_config.device);
+      }
+    }
+  }
+
   void addDjiMotor(const MotorConfig& config, const std::string& interface_name) {
     MotorType motor_type;
     if (config.type == "GM3508") {
@@ -166,6 +203,33 @@ private:
     if (!config.mirror_from.empty()) {
       dji_mirror_map_[config.name] = config.mirror_from;
     }
+  }
+
+  void addUnitreeNativeMotor(
+    const MotorConfig& config,
+    const std::string& interface_name,
+    const std::string& device_path)
+  {
+    if (config.type != "GO8010") {
+      RCLCPP_WARN(this->get_logger(), "跳过非 GO8010 串口电机配置: %s (%s)",
+        config.name.c_str(), config.type.c_str());
+      return;
+    }
+
+    auto motor = std::make_shared<UnitreeMotorNative>(
+      config.name, static_cast<uint8_t>(config.id), config.gear_ratio);
+    motor->setInterfaceName(interface_name);
+    motor->setDevicePath(device_path);
+
+    unitree_direction_[config.name] = config.direction >= 0 ? 1 : -1;
+    unitree_offset_[config.name] = config.offset;
+    motors_[config.name] = motor;
+    unitree_native_motors_.push_back(motor);
+
+    RCLCPP_INFO(this->get_logger(),
+      "添加 GO8010: %s id=%d device=%s dir=%d offset=%.4f gear=%.2f",
+      config.name.c_str(), config.id, device_path.c_str(),
+      unitree_direction_[config.name], config.offset, config.gear_ratio);
   }
 
   void loadPidParams() {
@@ -224,6 +288,34 @@ private:
     }
   }
 
+  int getUnitreeDirection(const std::string& joint_name) const {
+    const auto it = unitree_direction_.find(joint_name);
+    return it == unitree_direction_.end() ? 1 : it->second;
+  }
+
+  double getUnitreeOffset(const std::string& joint_name) const {
+    const auto it = unitree_offset_.find(joint_name);
+    return it == unitree_offset_.end() ? 0.0 : it->second;
+  }
+
+  double applyUnitreePosition(const std::string& joint_name, double raw_position) const {
+    return raw_position * static_cast<double>(getUnitreeDirection(joint_name)) -
+      getUnitreeOffset(joint_name);
+  }
+
+  double applyUnitreeVelocity(const std::string& joint_name, double raw_velocity) const {
+    return raw_velocity * static_cast<double>(getUnitreeDirection(joint_name));
+  }
+
+  double applyUnitreeTorque(const std::string& joint_name, double raw_torque) const {
+    return raw_torque * static_cast<double>(getUnitreeDirection(joint_name));
+  }
+
+  double outputToRawUnitreePosition(const std::string& joint_name, double output_position) const {
+    return (output_position + getUnitreeOffset(joint_name)) /
+      static_cast<double>(getUnitreeDirection(joint_name));
+  }
+
   void checkReconnect() {
     const int connected = can_network_->retryPendingInterfaces();
     if (connected > 0) {
@@ -253,6 +345,82 @@ private:
 
     writeDjiMotors();
     publishStates(now);
+  }
+
+  void serialInterfaceLoop(
+    const std::string& interface_name,
+    std::vector<std::shared_ptr<UnitreeMotorNative>> motors)
+  {
+    constexpr size_t frame_len = 16;
+    constexpr size_t buffer_size = 48;
+
+    RCLCPP_INFO(this->get_logger(), "[GO8010 Serial] 启动 %s, 电机数=%zu",
+      interface_name.c_str(), motors.size());
+
+    while (serial_running_.load(std::memory_order_relaxed)) {
+      auto serial = serial_network_->getInterface(interface_name);
+      if (!serial || !serial->isOpen()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+
+      for (auto& motor : motors) {
+        if (!serial_running_.load(std::memory_order_relaxed)) {
+          break;
+        }
+
+        uint8_t cmd[17] = {0};
+        uint8_t response[buffer_size] = {0};
+        motor->getCommandPacket(cmd);
+
+        ssize_t n = serial->sendRecvAccumulate(cmd, sizeof(cmd), response, frame_len, 4, 12);
+        bool ok = false;
+        if (n > 0) {
+          for (ssize_t off = 0; off + static_cast<ssize_t>(frame_len) <= n; ++off) {
+            if (response[off] == 0xFD && response[off + 1] == 0xEE &&
+                motor->parseFeedback(&response[off], frame_len)) {
+              ok = true;
+              break;
+            }
+          }
+        }
+
+        if (!ok) {
+          RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "[GO8010 Serial] %s 通信失败 iface=%s recv=%zd",
+            motor->getJointName().c_str(), interface_name.c_str(), n);
+        }
+      }
+    }
+
+    RCLCPP_INFO(this->get_logger(), "[GO8010 Serial] 退出 %s", interface_name.c_str());
+  }
+
+  void startSerialThreads() {
+    if (unitree_native_motors_.empty()) {
+      return;
+    }
+
+    std::map<std::string, std::vector<std::shared_ptr<UnitreeMotorNative>>> grouped;
+    for (auto& motor : unitree_native_motors_) {
+      grouped[motor->getInterfaceName()].push_back(motor);
+    }
+
+    serial_running_.store(true, std::memory_order_release);
+    for (const auto& [interface_name, motors] : grouped) {
+      serial_comm_threads_.emplace_back(
+        &MotorControlNode::serialInterfaceLoop, this, interface_name, motors);
+    }
+  }
+
+  void stopSerialThreads() {
+    serial_running_.store(false, std::memory_order_release);
+    for (auto& thread : serial_comm_threads_) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    serial_comm_threads_.clear();
   }
 
   void applyCommandTimeout(const rclcpp::Time& now) {
@@ -341,6 +509,23 @@ private:
       dji_state_pub_->publish(msg);
     }
 
+    for (const auto& motor : unitree_native_motors_) {
+      motor->checkHeartbeat(heartbeat_timeout_ms, current_time_ns);
+      const std::string joint = motor->getJointName();
+
+      auto msg = motor_control_ros2::msg::UnitreeGO8010State();
+      msg.header.stamp = now;
+      msg.joint_name = joint;
+      msg.motor_id = motor->getMotorId();
+      msg.online = motor->isOnline();
+      msg.position = static_cast<float>(applyUnitreePosition(joint, motor->getOutputPosition()));
+      msg.velocity = static_cast<float>(applyUnitreeVelocity(joint, motor->getOutputVelocity()));
+      msg.torque = static_cast<float>(applyUnitreeTorque(joint, motor->getOutputTorque()));
+      msg.temperature = static_cast<int8_t>(motor->getTemperature());
+      msg.error = static_cast<int8_t>(motor->getErrorCode());
+      unitree_go_state_pub_->publish(msg);
+    }
+
     auto freq_msg = motor_control_ros2::msg::ControlFrequency();
     freq_msg.header.stamp = now;
     freq_msg.control_frequency = actual_control_freq_;
@@ -396,21 +581,88 @@ private:
     }
   }
 
+  void unitreeGoCommandCallback(
+    const motor_control_ros2::msg::UnitreeGO8010Command::SharedPtr msg)
+  {
+    std::vector<std::shared_ptr<UnitreeMotorNative>> matched_motors;
+
+    if (!msg->joint_name.empty()) {
+      const auto it = motors_.find(msg->joint_name);
+      if (it != motors_.end()) {
+        auto native = std::dynamic_pointer_cast<UnitreeMotorNative>(it->second);
+        if (native) {
+          matched_motors.push_back(native);
+        }
+      }
+    } else {
+      for (auto& motor : unitree_native_motors_) {
+        if (motor->getMotorId() != msg->id) {
+          continue;
+        }
+        if (!msg->device.empty() && motor->getDevicePath() != msg->device) {
+          continue;
+        }
+        matched_motors.push_back(motor);
+      }
+    }
+
+    if (matched_motors.empty()) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+        "[CMD GO8010] 未找到电机 joint_name='%s' id=%u device='%s'",
+        msg->joint_name.c_str(), static_cast<unsigned>(msg->id), msg->device.c_str());
+      return;
+    }
+
+    for (auto& motor : matched_motors) {
+      switch (msg->mode) {
+        case motor_control_ros2::msg::UnitreeGO8010Command::MODE_BRAKE:
+          motor->setBrakeCommand();
+          break;
+        case motor_control_ros2::msg::UnitreeGO8010Command::MODE_FOC: {
+          const std::string joint = motor->getJointName();
+          const int direction = getUnitreeDirection(joint);
+          const double raw_position = outputToRawUnitreePosition(joint, msg->position_target);
+          const double raw_velocity = msg->velocity_target / static_cast<double>(direction);
+          const double raw_torque = msg->torque_ff / static_cast<double>(direction);
+          motor->setFOCCommand(raw_position, raw_velocity, msg->kp, msg->kd, raw_torque);
+          break;
+        }
+        case motor_control_ros2::msg::UnitreeGO8010Command::MODE_CALIBRATE:
+          motor->setCalibrateCommand();
+          break;
+        default:
+          RCLCPP_WARN(this->get_logger(), "[CMD GO8010] 未知模式: %u",
+            static_cast<unsigned>(msg->mode));
+          break;
+      }
+    }
+  }
+
   SystemConfig config_;
   std::shared_ptr<hardware::CANNetwork> can_network_;
+  std::shared_ptr<hardware::SerialNetwork> serial_network_;
   std::map<std::string, std::shared_ptr<MotorBase>> motors_;
   std::vector<std::shared_ptr<DJIMotor>> dji_motors_;
+  std::vector<std::shared_ptr<UnitreeMotorNative>> unitree_native_motors_;
   std::map<std::string, std::string> dji_mirror_map_;
+  std::map<std::string, int> unitree_direction_;
+  std::map<std::string, double> unitree_offset_;
   std::map<std::string, rclcpp::Time> last_motor_command_time_;
+  std::vector<std::thread> serial_comm_threads_;
+  std::atomic<bool> serial_running_{false};
 
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
 
   rclcpp::Publisher<motor_control_ros2::msg::DJIMotorState>::SharedPtr dji_state_pub_;
+  rclcpp::Publisher<motor_control_ros2::msg::UnitreeGO8010State>::SharedPtr
+    unitree_go_state_pub_;
   rclcpp::Publisher<motor_control_ros2::msg::ControlFrequency>::SharedPtr control_freq_pub_;
   rclcpp::Subscription<motor_control_ros2::msg::DJIMotorCommand>::SharedPtr dji_cmd_sub_;
   rclcpp::Subscription<motor_control_ros2::msg::DJIMotorCommandAdvanced>::SharedPtr
     dji_cmd_advanced_sub_;
+  rclcpp::Subscription<motor_control_ros2::msg::UnitreeGO8010Command>::SharedPtr
+    unitree_go_cmd_sub_;
 
   int control_loop_count_ = 0;
   int tx_frame_count_ = 0;

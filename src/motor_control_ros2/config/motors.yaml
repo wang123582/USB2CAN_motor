@@ -14,3 +14,45 @@ can_interfaces:
   - name: DJI3508_4
     type: GM3508
     id: 4
+
+serial_interfaces:
+- device: /dev/ttyUSB1
+  baudrate: 4000000
+  protocol: native
+  motors:
+  - name: arm_delta_motor_1
+    type: GO8010
+    id: 1
+    direction: 1
+    offset: 0.0
+    gear_ratio: 6.33
+- device: /dev/ttyUSB2
+  baudrate: 4000000
+  protocol: native
+  motors:
+  - name: arm_delta_motor_2
+    type: GO8010
+    id: 2
+    direction: 1
+    offset: 0.0
+    gear_ratio: 6.33
+- device: /dev/ttyUSB3
+  baudrate: 4000000
+  protocol: native
+  motors:
+  - name: arm_delta_motor_3
+    type: GO8010
+    id: 3
+    direction: 1
+    offset: 0.0
+    gear_ratio: 6.33
+- device: /dev/ttyUSB0
+  baudrate: 4000000
+  protocol: native
+  motors:
+  - name: arm_tilt_motor
+    type: GO8010
+    id: 0
+    direction: 1
+    offset: 0.0
+    gear_ratio: 6.33
