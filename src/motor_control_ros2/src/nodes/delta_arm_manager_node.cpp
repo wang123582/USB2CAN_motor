@@ -440,8 +440,10 @@ void DeltaArmManager::controlLoop()
           current_planned_vels_[i] = 0.0;
         }
         const double physical_target = zero_positions_[i] + planned_deltas_rad_[i];
+        // 上抛同样关闭位置钳位（bypass_clamp=true）：速度优先，让 PD 看到完整误差、
+        // 电机落后时也能跑满上抛力矩。粗跟踪失控仍由 tracking_error_pause_ 兜底。
         publishCommand(i, physical_target, current_planned_vels_[i],
-                       gravity_compensation_torque_, kp_, kd_);
+                       gravity_compensation_torque_, kp_, kd_, /*bypass_clamp=*/true);
       }
 
       if (allMotorsReached()) {
