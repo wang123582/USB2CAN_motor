@@ -30,7 +30,7 @@
 | `serve_test.strike_delay_override_s` | `src/motor_control_ros2/config/arm_config.yaml` | 上抛后触发击球的测试固定延迟；`>=0` 时优先于模型时间 | 先用 `0.35`，录像后调 |
 | `serve_test.arm_lower_length_m` / `arm_upper_length_m` | `src/motor_control_ros2/config/arm_config.yaml` | 弹道测试估算用机械臂长度 | `0.160` / `0.230` |
 | `retract.*` | `src/motor_control_ros2/config/arm_config.yaml` | 快速收拍回相对 0 的 GO8010 增益/前馈 | 需硬件联调 |
-| `tilt.*` | `src/motor_control_ros2/config/arm_config.yaml` | 俯仰 GO8010 设备、躺下角和增益 | 默认 `/dev/ttyUSB0`、`id=0`、`down_angle_rad=1.0` |
+| `tilt.*` | `src/motor_control_ros2/config/arm_config.yaml` | 俯仰 GO8010 角度和增益：`kp/kd/torque_ff` 管下压（快），`return_kp/return_kd/return_rate_rad_s` 管回摆斜坡（稳），`ready_torque_ff` 管待机保持 | `down_angle_rad=1.6`、`return_rate_rad_s=3.0`；**角度均为相对零点（首帧反馈锁定），上电时俯仰必须在躺平待机位** |
 | `serial_interfaces` | `src/motor_control_ros2/config/motors.yaml` | GO8010 原生串口电机配置，`device + id` 要与 `arm_config.yaml` 匹配 | 默认 `/dev/ttyUSB0/1/2/3`，各 `id=0` |
 | `direction` / `offset` / `gear_ratio` | `src/motor_control_ros2/config/motors.yaml` | GO8010 反馈和命令的方向、零位、减速比换算 | 需实机标定 |
 

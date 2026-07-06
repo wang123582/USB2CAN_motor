@@ -1,45 +1,54 @@
 omni_chassis_control_node:
   ros__parameters:
-    control_frequency: 100.0
-    cmd_vel_topic: "/cmd_vel"
-    cmd_pose_topic: "/cmd_pose"
-    odom_topic: "/odom"
-    estop_topic: "/chassis/estop"
-    default_mode: "velocity"
-    # open_loop: 遥控速度直接做逆运动学输出轮速，暂不依赖 /odom.twist。
-    # closed_loop: 使用 /odom.twist 和 velocity_pid_* 做速度闭环。
+    control_frequency: 100.0        # 控制循环频率（Hz）
+    cmd_vel_topic: "/cmd_vel"       # 订阅速度指令话题（geometry_msgs/Twist）
+    cmd_pose_topic: "/cmd_pose"     # 订阅位姿指令话题（geometry_msgs/Pose2D）
+    odom_topic: "/odom"             # 发布里程计话题（nav_msgs/Odometry）
+    estop_topic: "/chassis/estop"   # 急停话题（std_msgs/Bool），true 时底盘输出清零
+    default_mode: "velocity"        # 默认控制模式：velocity / position
+
+    # open_loop:   遥控速度直接做逆运动学 → 轮速，不依赖里程计反馈
+    # closed_loop: 使用 /odom.twist + velocity_pid_* 做速度闭环
     velocity_control_mode: "open_loop"
 
-    wheel_base_x: 0.88
-    wheel_base_y: 0.88
-    wheel_radius: 0.1062
-    install_angle: 45.0
+    # ── 底盘机械参数 ────────────────────────────────────────────
+    wheel_base_x: 0.88      # 前后轮轴距的一半（m），即轮组中心到底盘中心 X 方向距离
+    wheel_base_y: 0.88      # 左右轮轴距的一半（m），即轮组中心到底盘中心 Y 方向距离
+    wheel_radius: 0.1062    # 麦克纳姆轮半径（m）
+    install_angle: 45.0     # 轮子安装角（度），标准麦克纳姆轮为 45°
 
-    max_linear_velocity: 2.0
-    max_angular_velocity: 2.0
-    cmd_timeout: 0.5
-    zero_target_deadband: 0.001
-    position_timeout: 1.0
-    goal_tolerance_xy: 0.02
-    goal_tolerance_yaw: 0.05
+    # ── 速度限幅 ────────────────────────────────────────────────
+    max_linear_velocity: 2.0    # 线速度上限（m/s）
+    max_angular_velocity: 2.0   # 角速度上限（rad/s）
+    cmd_timeout: 0.5            # 速度指令超时（s），超时后底盘停止
+    zero_target_deadband: 0.001 # 速度指令死区（m/s 或 rad/s），小于此值视为零
 
-    fl_motor: "DJI3508_1"
-    fr_motor: "DJI3508_2"
-    rl_motor: "DJI3508_3"
-    rr_motor: "DJI3508_4"
+    # ── 位置模式参数 ────────────────────────────────────────────
+    position_timeout: 1.0       # 位置控制超时（s）
+    goal_tolerance_xy: 0.02     # XY 到位容差（m）
+    goal_tolerance_yaw: 0.05    # 偏航到位容差（rad）
 
+    # ── 电机绑定（joint_name 对应 motors.yaml）──────────────────
+    fl_motor: "DJI3508_1"   # 左前轮
+    fr_motor: "DJI3508_2"   # 右前轮
+    rl_motor: "DJI3508_3"   # 左后轮
+    rr_motor: "DJI3508_4"   # 右后轮
+
+    # 驱动方向：+1 正转 / -1 反转（根据电机安装方向调整）
     fl_drive_direction: 1
     fr_drive_direction: 1
     rl_drive_direction: 1
     rr_drive_direction: 1
 
+    # ── 速度闭环 PID（仅 closed_loop 模式生效）──────────────────
+    # 各轴独立 PID，输入为速度误差（m/s 或 rad/s），输出为速度修正量
     velocity_pid_x:
       kp: 2.0
       ki: 0.2
       kd: 0.0
-      i_max: 1.0
-      out_max: 2.0
-      dead_zone: 0.0
+      i_max: 1.0      # 积分限幅（m/s）
+      out_max: 2.0    # 输出限幅（m/s）
+      dead_zone: 0.0  # 死区（m/s）
 
     velocity_pid_y:
       kp: 2.0
@@ -57,12 +66,14 @@ omni_chassis_control_node:
       out_max: 2.0
       dead_zone: 0.0
 
+    # ── 位置闭环 PID（position 模式生效）────────────────────────
+    # 输入为位置误差（m 或 rad），输出为目标速度（m/s 或 rad/s）
     position_pid_x:
       kp: 1.2
       ki: 0.0
       kd: 0.0
       i_max: 0.0
-      out_max: 1.0
+      out_max: 1.0     # 位置环输出限幅即最大速度（m/s）
       dead_zone: 0.005
 
     position_pid_y:

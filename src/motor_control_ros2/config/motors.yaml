@@ -1,26 +1,36 @@
-can_interfaces:
-- device: /dev/robocon_usb2can
-  baudrate: 921600
-  motors:
-  - name: DJI3508_1
-    type: GM3508
-    id: 1
-  - name: DJI3508_2
-    type: GM3508
-    id: 2
-  - name: DJI3508_3
-    type: GM3508
-    id: 3
-  - name: DJI3508_4
-    type: GM3508
-    id: 4
+# 硬件电机映射配置
+# motor_control_node 启动时读取，按此文件创建所有电机对象并绑定到对应总线接口
 
+# ── CAN 总线接口（USB2CAN 适配器，私有串口协议）────────────────────────────
+can_interfaces:
+- device: /dev/ttyACM0   # USB2CAN 适配器串口设备节点
+  baudrate: 921600        # PC↔适配器串口波特率（与 CAN 总线速率无关，CAN 侧固定 1Mbps）
+  motors:
+  - name: DJI3508_1       # joint_name，全局唯一，serve_windmill_params.yaml 中 master_name 引用
+    type: GM3508          # 电机型号：GM3508（电流控制）或 GM6020（电压控制）
+    id: 1                 # CAN ID（GM3508 id=1 对应反馈帧 0x201，命令帧 0x200）
+  - name: DJI3508_2       # joint_name，serve_windmill_params.yaml 中 encoder_name 引用
+    type: GM3508
+    id: 2                 # CAN ID=2，反馈帧 0x202
+  # 底盘电机（当前注释掉，风车测试时不启用）
+  # - name: DJI3508_3
+  #   type: GM3508
+  #   id: 3
+  # - name: DJI3508_4
+  #   type: GM3508
+  #   id: 4
+
+# ── 串口接口（GO8010 原生协议，4Mbps）────────────────────────────────────────
+# 每路串口一个 GO8010 电机，波特率固定 4000000
+# direction: +1 正转 / -1 反转（翻转速度和位置符号）
+# offset: 软件零位偏移（rad），上电后相对该偏移量运动
+# gear_ratio: 减速比，GO8010 内置 6.33:1，影响输出端速度/力矩换算
 serial_interfaces:
 - device: /dev/ttyUSB1
   baudrate: 4000000
-  protocol: native
+  protocol: native        # 使用 Unitree 原生串口协议（非 SDK）
   motors:
-  - name: arm_delta_motor_1
+  - name: arm_delta_motor_1   # Delta 上抛臂第 1 路，arm_config.yaml motors[0] 引用
     type: GO8010
     id: 1
     direction: 1
@@ -30,7 +40,7 @@ serial_interfaces:
   baudrate: 4000000
   protocol: native
   motors:
-  - name: arm_delta_motor_2
+  - name: arm_delta_motor_2   # Delta 上抛臂第 2 路
     type: GO8010
     id: 2
     direction: 1
@@ -40,7 +50,7 @@ serial_interfaces:
   baudrate: 4000000
   protocol: native
   motors:
-  - name: arm_delta_motor_3
+  - name: arm_delta_motor_3   # Delta 上抛臂第 3 路
     type: GO8010
     id: 3
     direction: 1
@@ -50,7 +60,7 @@ serial_interfaces:
   baudrate: 4000000
   protocol: native
   motors:
-  - name: arm_tilt_motor
+  - name: arm_tilt_motor      # 俯仰臂（发球角度调节），arm_config.yaml tilt.name 引用
     type: GO8010
     id: 0
     direction: 1

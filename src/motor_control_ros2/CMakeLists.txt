@@ -107,6 +107,19 @@ ament_target_dependencies(motor_monitor_node
   rclcpp
 )
 
+add_executable(serve_windmill_manager
+  src/nodes/serve_windmill_manager.cpp
+)
+target_link_libraries(serve_windmill_manager
+  yaml-cpp
+  "${cpp_typesupport_target}"
+)
+ament_target_dependencies(serve_windmill_manager
+  ament_index_cpp
+  rclcpp
+  std_msgs
+)
+
 install(TARGETS
   motor_control_lib
   motor_control_node
@@ -114,6 +127,7 @@ install(TARGETS
   motor_monitor_node
   omni_chassis_control_node
   rc_usb_control_node
+  serve_windmill_manager
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -124,6 +138,10 @@ install(DIRECTORY include/
 )
 
 install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 

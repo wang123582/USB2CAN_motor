@@ -24,19 +24,19 @@ rc_usb_control_node:
     #
     # 实测修正:
     # lx -> linear.x, ly -> linear.y, rx -> angular.z
-    axis_max: 660.0
-    deadzone: 0.05
-    max_linear_velocity: 0.5
-    max_angular_velocity: 1.0
-    invert_linear_x: false
-    invert_linear_y: false
-    invert_angular_z: false
+    axis_max: 660.0             # 摇杆原始值满偏量程（归一化分母）
+    deadzone: 0.05              # 归一化后死区（0~1），小于此值输出零
+    max_linear_velocity: 0.5    # 线速度上限（m/s），摇杆满偏对应此速度
+    max_angular_velocity: 1.0   # 角速度上限（rad/s），摇杆满偏对应此角速度
+    invert_linear_x: false      # 是否翻转 X 轴方向
+    invert_linear_y: false      # 是否翻转 Y 轴方向
+    invert_angular_z: false     # 是否翻转旋转方向
 
-    publish_rate: 50.0
-    command_timeout: 0.3
-    vision_timeout: 0.3
-    diagnostics_interval_sec: 1.0
-    publish_zero_before_first_frame: true
+    publish_rate: 50.0          # cmd_vel 发布频率（Hz）
+    command_timeout: 0.3        # 串口数据超时（s），超时后发送零速停车
+    vision_timeout: 0.3         # 视觉速度指令超时（s）
+    diagnostics_interval_sec: 1.0  # 诊断信息打印间隔（s）
+    publish_zero_before_first_frame: true  # 节点启动后未收到第一帧前先发零速
 
     # DJI DBUS 三档拨杆值: UP=1, MID=3, DOWN=2
     # 当前使用物理左拨杆，对应帧内 sw_left 字段。

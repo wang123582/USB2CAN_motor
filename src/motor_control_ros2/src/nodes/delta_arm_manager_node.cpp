@@ -8,6 +8,7 @@ DeltaArmManager::DeltaArmManager()
       landing_velocity_threshold_(0.3),
       landing_stable_duration_(0.8),
       landing_kd_(0.05),
+      landing_debug_log_(true),
       kp_(0.50),
       kd_(0.20),
       max_velocity_(10.0),
@@ -19,6 +20,9 @@ DeltaArmManager::DeltaArmManager()
       state_(State::INIT),
       max_acceleration_(50.0),
       planner_p_gain_(15.0),
+      top_press_margin_rad_(0.10),
+      top_approach_band_rad_(0.20),
+      stop_settle_vel_(0.5),
       landing_stability_started_(false),
       ready_published_(false),
       gravity_compensation_torque_(0.8),
@@ -35,13 +39,16 @@ DeltaArmManager::DeltaArmManager()
       retract_kp_(1.50),
       retract_kd_(0.15),
       retract_torque_ff_(-0.5),
-      retract_max_velocity_(15.0),
-      retract_max_acceleration_(80.0),
+      retract_max_velocity_(18.0),
+      retract_max_acceleration_(130.0),
+      retract_bottom_soft_(0.35),
+      retract_debug_log_(true),
       tilt_ready_angle_rad_(0.0),
       tilt_down_angle_rad_(1.0),
-      tilt_kp_(0.50),
-      tilt_kd_(0.20),
-      tilt_torque_ff_(0.0),
+      tilt_kp_(2.0),
+      tilt_kd_(0.30),
+      tilt_hold_ff_(1.1),
+      tilt_rate_rad_s_(6.0),
       tilt_position_tolerance_(0.05),
       tilt_max_position_error_(0.5),
       tilt_motor_name_("arm_tilt_motor"),
@@ -49,9 +56,15 @@ DeltaArmManager::DeltaArmManager()
       tilt_velocity_(0.0),
       tilt_online_(false),
       has_tilt_feedback_(false),
+      tilt_zero_position_(0.0),
+      tilt_zero_captured_(false),
+      tilt_cmd_angle_(0.0),
       estimated_launch_height_m_(0.0),
       estimated_fall_time_s_(0.0),
-      strike_trigger_sent_(false)
+      strike_trigger_sent_(false),
+      wind_status_(""),
+      wind_catch_seen_(false),
+      wind_done_timeout_s_(8.0)
 {
   current_positions_.fill(0.0);
   current_velocities_.fill(0.0);
@@ -96,6 +109,11 @@ DeltaArmManager::DeltaArmManager()
   // 触发击球机构
   serve_trigger_pub_ = this->create_publisher<std_msgs::msg::Bool>("/serve/trigger", 10);
 
+  // 订阅 windmill 状态：等它打完整循环(CATCH 完毕)俯仰再回摆
+  wind_status_sub_ = this->create_subscription<std_msgs::msg::String>(
+      "/serve/status", 10,
+      std::bind(&DeltaArmManager::windStatusCallback, this, std::placeholders::_1));
+
   // 创建控制定时器
   auto period = std::chrono::duration<double>(1.0 / control_frequency_);
   control_timer_ = this->create_wall_timer(
@@ -110,7 +128,7 @@ DeltaArmManager::DeltaArmManager()
       "delta_arm_manager 启动，控制频率 %.1f Hz，电机: [%s, %s, %s]",
       control_frequency_,
       motor_names_[0].c_str(), motor_names_[1].c_str(), motor_names_[2].c_str());
-  RCLCPP_INFO(this->get_logger(), "状态: INIT → 进入软着陆流程");
+  RCLCPP_INFO(this->get_logger(), "状态：初始化 → 进入软着陆流程");
 }
 
 // ========== 配置加载 ==========
@@ -131,6 +149,7 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (init["landing_stable_duration"])  landing_stable_duration_   = init["landing_stable_duration"].as<double>();
     if (init["landing_kd"])              landing_kd_                = init["landing_kd"].as<double>();
     if (init["gravity_compensation_torque"]) gravity_compensation_torque_ = init["gravity_compensation_torque"].as<double>();
+    if (init["debug_log"]) landing_debug_log_ = init["debug_log"].as<bool>();
   }
 
   auto pd = cfg["pd"];
@@ -144,6 +163,9 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (mp["max_velocity"])     max_velocity_     = mp["max_velocity"].as<double>();
     if (mp["max_acceleration"]) max_acceleration_ = mp["max_acceleration"].as<double>();
     if (mp["planner_p_gain"])   planner_p_gain_   = mp["planner_p_gain"].as<double>();
+    if (mp["top_press_margin_rad"])  top_press_margin_rad_  = mp["top_press_margin_rad"].as<double>();
+    if (mp["top_approach_band_rad"]) top_approach_band_rad_ = mp["top_approach_band_rad"].as<double>();
+    if (mp["stop_settle_vel"])       stop_settle_vel_       = mp["stop_settle_vel"].as<double>();
   }
 
   auto motors = cfg["motors"];
@@ -191,6 +213,7 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (serve["retract_timeout_s"]) retract_timeout_s_ = serve["retract_timeout_s"].as<double>();
     if (serve["tilt_timeout_s"]) tilt_timeout_s_ = serve["tilt_timeout_s"].as<double>();
     if (serve["strike_trigger_pulse_s"]) strike_trigger_pulse_s_ = serve["strike_trigger_pulse_s"].as<double>();
+    if (serve["wind_done_timeout_s"]) wind_done_timeout_s_ = serve["wind_done_timeout_s"].as<double>();
   }
 
   auto retract = cfg["retract"];
@@ -200,6 +223,8 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (retract["torque_ff"]) retract_torque_ff_ = retract["torque_ff"].as<double>();
     if (retract["max_velocity"]) retract_max_velocity_ = retract["max_velocity"].as<double>();
     if (retract["max_acceleration"]) retract_max_acceleration_ = retract["max_acceleration"].as<double>();
+    if (retract["bottom_soft_rad"]) retract_bottom_soft_ = retract["bottom_soft_rad"].as<double>();
+    if (retract["debug_log"]) retract_debug_log_ = retract["debug_log"].as<bool>();
   }
 
   auto tilt = cfg["tilt"];
@@ -209,7 +234,8 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
     if (tilt["down_angle_rad"]) tilt_down_angle_rad_ = tilt["down_angle_rad"].as<double>();
     if (tilt["kp"]) tilt_kp_ = tilt["kp"].as<double>();
     if (tilt["kd"]) tilt_kd_ = tilt["kd"].as<double>();
-    if (tilt["torque_ff"]) tilt_torque_ff_ = tilt["torque_ff"].as<double>();
+    if (tilt["hold_torque_ff"]) tilt_hold_ff_ = tilt["hold_torque_ff"].as<double>();
+    if (tilt["rate_rad_s"]) tilt_rate_rad_s_ = tilt["rate_rad_s"].as<double>();
     if (tilt["position_tolerance"]) tilt_position_tolerance_ = tilt["position_tolerance"].as<double>();
     if (tilt["max_position_error"]) tilt_max_position_error_ = tilt["max_position_error"].as<double>();
   }
@@ -243,9 +269,9 @@ void DeltaArmManager::armTargetCallback(
 
   if (state_ != State::READY && state_ != State::SOFT_LANDING && state_ != State::INIT) {
     RCLCPP_WARN(this->get_logger(),
-        "收到目标命令，但当前状态为 %s，拒绝执行（仅 READY/INIT/SOFT_LANDING 状态接受命令）",
-        state_ == State::INIT ? "INIT" :
-        state_ == State::SOFT_LANDING ? "SOFT_LANDING" : "UNKNOWN");
+        "收到目标命令，但当前状态为 %s，拒绝执行（仅就绪/初始化/软着陆状态接受命令）",
+        state_ == State::INIT ? "初始化" :
+        state_ == State::SOFT_LANDING ? "软着陆" : "未知");
     return;
   }
 
@@ -284,7 +310,7 @@ void DeltaArmManager::armTargetCallback(
     }
     landing_stability_started_ = false;
     RCLCPP_WARN(this->get_logger(),
-        "收到执行命令，提前结束软着陆并撤去向下力矩，直接进入 EXECUTE");
+        "收到执行命令，提前结束软着陆并撤去向下力矩，直接进入上抛阶段");
   }
 
   for (size_t i = 0; i < 3; ++i) {
@@ -300,7 +326,7 @@ void DeltaArmManager::armTargetCallback(
   estimated_fall_time_s_ = estimateFallTime(estimated_launch_height_m_);
   state_ = State::EXECUTE;
   RCLCPP_INFO(this->get_logger(),
-      "READY → EXECUTE: 目标增量 [%.3f, %.3f, %.3f] rad；估算高度 %.3f m，下落时间 %.3f s",
+      "就绪 → 上抛：目标增量 [%.3f, %.3f, %.3f] rad，估算高度 %.3f m，下落时间 %.3f s",
       target_deltas_rad_[0], target_deltas_rad_[1], target_deltas_rad_[2],
       estimated_launch_height_m_, estimated_fall_time_s_);
 }
@@ -323,7 +349,23 @@ void DeltaArmManager::motorStateCallback(
     tilt_velocity_ = static_cast<double>(msg->velocity);
     tilt_online_ = msg->online;
     has_tilt_feedback_ = true;
+    // 俯仰零点解耦：GO8010 反馈是电机上电坐标系，首帧在线反馈时锁定当前物理角为零点，
+    // 之后 ready/down 角全部相对该零点（与三路 delta 的 zero_positions_ 同理）。
+    if (!tilt_zero_captured_ && msg->online) {
+      tilt_zero_position_ = tilt_position_;
+      tilt_cmd_angle_ = 0.0;
+      tilt_zero_captured_ = true;
+      RCLCPP_INFO(this->get_logger(),
+          "俯仰零点锁定：原始角 %.3f rad，此后 ready=%.3f down=%.3f 均为相对角",
+          tilt_zero_position_, tilt_ready_angle_rad_, tilt_down_angle_rad_);
+    }
   }
+}
+
+void DeltaArmManager::windStatusCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  // 只缓存最新 windmill 状态名，WAIT_WIND_DONE 里据此判断"接住完毕"
+  wind_status_ = msg->data;
 }
 
 // ========== 主控制循环 ==========
@@ -339,7 +381,16 @@ void DeltaArmManager::controlLoop()
       state_ = State::SOFT_LANDING;
       landing_stability_started_ = false;
       init_start_time_ = this->now();
-      RCLCPP_INFO(this->get_logger(), "INIT → SOFT_LANDING: 施加向下力矩 %.2f Nm + 阻尼 kd=%.3f", downward_torque_, landing_kd_);
+      RCLCPP_INFO(this->get_logger(), "初始化 → 软着陆：施加向下力矩 %.2f Nm，阻尼 kd=%.3f", downward_torque_, landing_kd_);
+      // 定位"刚开始的向下力"：打印 CSV 表头，后续每周期一行。
+      //   cmd_tq=下发给三路 delta 的前馈力矩(=downward_torque)  landing_kd=阻尼
+      //   m{i}_pos/vel=各 delta 反馈角/速度(原始上电系)  tilt_pos/vel=俯仰反馈
+      // 判读：cmd_tq≈0 但 m_vel 为负持续下沉 → 自重(重力)；tilt_vel 非零 → 俯仰在动。
+      if (landing_debug_log_) {
+        RCLCPP_INFO(this->get_logger(),
+            "LANDING_CSV,t,cmd_tq,landing_kd,"
+            "m1_pos,m1_vel,m2_pos,m2_vel,m3_pos,m3_vel,tilt_pos,tilt_vel");
+      }
       break;
     }
 
@@ -349,6 +400,13 @@ void DeltaArmManager::controlLoop()
       if (elapsed > landing_timeout_) {
         RCLCPP_WARN(this->get_logger(),
             "软着陆超时 (%.1f s)，强制进入 READY 状态", landing_timeout_);
+        // 超时路径同样要锁定零点：否则 READY 会拿默认 0（上电原点）当零点硬拉三路电机
+        for (size_t i = 0; i < 3; ++i) {
+          zero_positions_[i] = current_positions_[i];
+        }
+        planned_deltas_rad_.fill(0.0);
+        target_deltas_rad_.fill(0.0);
+        current_planned_vels_.fill(0.0);
         state_ = State::READY;
         publishReady();
         break;
@@ -360,6 +418,18 @@ void DeltaArmManager::controlLoop()
         publishCommand(i, 0.0, 0.0, downward_torque_, 0.0, landing_kd_);
       }
 
+      // 软着陆逐周期数据记录：对齐 INIT 打印的表头
+      if (landing_debug_log_) {
+        RCLCPP_INFO(this->get_logger(),
+            "LANDING_CSV,%.4f,%.3f,%.3f,"
+            "%.4f,%.3f,%.4f,%.3f,%.4f,%.3f,%.4f,%.3f",
+            elapsed, downward_torque_, landing_kd_,
+            current_positions_[0], current_velocities_[0],
+            current_positions_[1], current_velocities_[1],
+            current_positions_[2], current_velocities_[2],
+            tilt_position_, tilt_velocity_);
+      }
+
       // 检查着陆稳定条件（速度反馈 < 阈值）
       if (allMotorsLanded()) {
         if (!landing_stability_started_) {
@@ -369,7 +439,7 @@ void DeltaArmManager::controlLoop()
         double stable_time = (this->now() - landing_stable_since_).seconds();
         if (stable_time >= landing_stable_duration_) {
           RCLCPP_INFO(this->get_logger(),
-              "软着陆完成（稳定 %.2f s），SOFT_LANDING → READY", stable_time);
+              "软着陆完成（稳定 %.2f s），软着陆 → 就绪", stable_time);
           // 解耦：将当前物理角锁定为零点，后续控制坐标从 0 rad 开始
           for (size_t i = 0; i < 3; ++i) {
             zero_positions_[i] = current_positions_[i];
@@ -396,7 +466,7 @@ void DeltaArmManager::controlLoop()
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, 0, kp_, kd_);
       }
-      publishTiltCommand(tilt_ready_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
+      tiltCommand(tilt_ready_angle_rad_, dt);
       break;
     }
 
@@ -404,7 +474,7 @@ void DeltaArmManager::controlLoop()
       // 上抛超时保护：测试阶段保留，避免异常时卡在 EXECUTE。
       double execute_elapsed = (this->now() - execute_start_time_).seconds();
       if (execute_elapsed > top_idle_timeout_) {
-        RCLCPP_WARN(this->get_logger(), "EXECUTE 超时 (%.1f s)，强制进入 FAST_RETRACT", top_idle_timeout_);
+        RCLCPP_WARN(this->get_logger(), "上抛阶段超时 (%.1f s)，强制进入快速收拍", top_idle_timeout_);
         enterFastRetract();
         break;
       }
@@ -422,11 +492,15 @@ void DeltaArmManager::controlLoop()
         }
       }
 
-      // 平滑轨迹生成：每路独立规划（目标行程略有差异）
+      // 冲顶部限位：三路满速上抛 → 接近顶部降速软压 → 都被挡块顶到同位置、速度一起归零。
+      // 目标压到限位再往上 top_press_margin，PD 持续把臂顶向挡块（机械挡块负责三路对齐+反力）。
       const double max_dv = max_acceleration_ * dt;
       for (size_t i = 0; i < 3; ++i) {
         if (tracking_ok) {
-          double err = target_deltas_rad_[i] - planned_deltas_rad_[i];
+          // 球在顶部靠机械臂撞挡块急停才脱手 → 出手速度 = 撞挡块前的臂速，必须最大、绝不减速。
+          // 目标越过限位一点(press_margin)，让规划全程满加速冲向挡块、不进减速段（挡块吃冲击+同步）。
+          const double press_target = target_deltas_rad_[i] + top_press_margin_rad_;
+          double err = press_target - planned_deltas_rad_[i];
           double target_vel = std::clamp(err * planner_p_gain_, -max_velocity_, max_velocity_);
           if (target_vel > current_planned_vels_[i] + max_dv) {
             current_planned_vels_[i] += max_dv;
@@ -446,41 +520,83 @@ void DeltaArmManager::controlLoop()
                        gravity_compensation_torque_, kp_, kd_, /*bypass_clamp=*/true);
       }
 
-      if (allMotorsReached()) {
-        RCLCPP_INFO(this->get_logger(), "上抛目标到达，EXECUTE → FAST_RETRACT");
+      // 上抛期间俯仰保持待机位：恒定向上前馈托住 + 单一 PD 锁在待机角，
+      // 抵抗三路上抛反作用力矩摇动减速箱（齿隙撞击/异响）。
+      tiltCommand(tilt_ready_angle_rad_, dt);
+
+      // 撞停判据（不再用 allMotorsReached，只看位置会因三路到达时间不同而 +/- 割裂）：
+      // 三路都已顶到接近限位处（ad 进入 approach_band）且实际速度都降到阈值以下（被挡块顶停、
+      // 一起到 0）→ 三路在挡块上对齐，此刻进收拍就是从同步态一起往下走。
+      bool all_settled = true;
+      for (size_t i = 0; i < 3; ++i) {
+        if (!motors_online_[i] || !has_feedback_[i]) { all_settled = false; break; }
+        const double ad = current_positions_[i] - zero_positions_[i];
+        if (ad < target_deltas_rad_[i] - top_approach_band_rad_) { all_settled = false; break; }
+        if (std::abs(current_velocities_[i]) > stop_settle_vel_) { all_settled = false; break; }
+      }
+      if (all_settled) {
+        RCLCPP_INFO(this->get_logger(), "三路撞停顶部限位对齐 → 快速收拍");
         enterFastRetract();
       }
       break;
     }
 
     case State::FAST_RETRACT: {
-      // 快速收拍：反向梯形规划从顶点回相对 0。速度优先——用独立的高速上限，
-      // 带 velocity_target 前馈；仅在贴近零点时收速度，避免砸零点回弹。
-      // 位置钳位对收拍关闭（bypass_clamp=true），让 PD 看到完整误差、跑满力矩。
+      // 快速收拍（简化版）：顶部限位已把三路对齐（同位置、同零速），从同步态一起往下走。
+      // 三路共享一条开环梯形轨迹直接回 0，不再做 lead_cap 牵引 / 滞后预测那套——因为起点已同步，
+      // 三路跟同一条命令下降，不会再出现"有的正有的负"；顺滑非重点，开环反而无牵引锯齿。
+      // 仅保留底部软着陆：贴零前撤下向下前馈，防带速砸底反弹再次产生 +/- 割裂。
       const double retract_max_dv = retract_max_acceleration_ * dt;
+
+      // 共享规划角/速度（复用 [0] 存共享量）：朝 0 的开环梯形，距零 max_v/p_gain 内开始减速
+      double shared_planned = planned_deltas_rad_[0];
+      double shared_vel     = current_planned_vels_[0];
+      const double target_vel = std::clamp((0.0 - shared_planned) * planner_p_gain_,
+                                           -retract_max_velocity_, retract_max_velocity_);
+      if (target_vel > shared_vel + retract_max_dv)      shared_vel += retract_max_dv;
+      else if (target_vel < shared_vel - retract_max_dv) shared_vel -= retract_max_dv;
+      else                                               shared_vel = target_vel;
+      shared_planned += shared_vel * dt;
+      // 不冲过零点：规划角不低于 0，避免把电机往机械底下面硬拉
+      if (shared_planned < 0.0) { shared_planned = 0.0; if (shared_vel < 0.0) shared_vel = 0.0; }
+
       for (size_t i = 0; i < 3; ++i) {
-        double err = target_deltas_rad_[i] - planned_deltas_rad_[i];  // target = 0
-        double target_vel = std::clamp(err * planner_p_gain_,
-                                       -retract_max_velocity_, retract_max_velocity_);
-        if (target_vel > current_planned_vels_[i] + retract_max_dv) {
-          current_planned_vels_[i] += retract_max_dv;
-        } else if (target_vel < current_planned_vels_[i] - retract_max_dv) {
-          current_planned_vels_[i] -= retract_max_dv;
-        } else {
-          current_planned_vels_[i] = target_vel;
-        }
-        planned_deltas_rad_[i] += current_planned_vels_[i] * dt;
-        const double physical_target = zero_positions_[i] + planned_deltas_rad_[i];
-        publishCommand(i, physical_target, current_planned_vels_[i],
-                       retract_torque_ff_, retract_kp_, retract_kd_, /*bypass_clamp=*/true);
+        planned_deltas_rad_[i]   = shared_planned;   // 三路同一条轨迹
+        current_planned_vels_[i] = shared_vel;
+        const double physical_target = zero_positions_[i] + shared_planned;
+        // 底部软着陆：实际角低于 bottom_soft 时撤下向下前馈，先到的电机贴零点等其他两路
+        const double ad = current_positions_[i] - zero_positions_[i];
+        const double ff = (ad < retract_bottom_soft_) ? 0.0 : retract_torque_ff_;
+        publishCommand(i, physical_target, shared_vel, ff, retract_kp_, retract_kd_, /*bypass_clamp=*/true);
       }
-      publishTiltCommand(tilt_down_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
+      tiltCommand(tilt_down_angle_rad_, dt);
+      maybeTriggerStrike();  // 挥拍时机只看 launch 后 strike_delay，收拍途中到点就发，不等收拍完
 
       const double elapsed = (this->now() - state_enter_time_).seconds();
+
+      // 收拍逐周期数据记录：每字段对齐 enterFastRetract 打印的表头
+      if (retract_debug_log_) {
+        const double ad0 = current_positions_[0] - zero_positions_[0];
+        const double ad1 = current_positions_[1] - zero_positions_[1];
+        const double ad2 = current_positions_[2] - zero_positions_[2];
+        const double tilt_ad = tilt_zero_captured_ ? (tilt_position_ - tilt_zero_position_) : 0.0;
+        RCLCPP_INFO(this->get_logger(),
+            "RETRACT_CSV,%.4f,"
+            "%.4f,%.4f,%.4f,%.3f,%.3f,"
+            "%.4f,%.4f,%.4f,%.3f,%.3f,"
+            "%.4f,%.4f,%.4f,%.3f,%.3f,"
+            "%.4f,%.4f,%.3f",
+            elapsed,
+            planned_deltas_rad_[0], ad0, planned_deltas_rad_[0] - ad0, current_planned_vels_[0], current_velocities_[0],
+            planned_deltas_rad_[1], ad1, planned_deltas_rad_[1] - ad1, current_planned_vels_[1], current_velocities_[1],
+            planned_deltas_rad_[2], ad2, planned_deltas_rad_[2] - ad2, current_planned_vels_[2], current_velocities_[2],
+            tilt_cmd_angle_, tilt_ad, tilt_velocity_);
+      }
+
       if (allMotorsAtZero() || elapsed >= retract_timeout_s_) {
         RCLCPP_INFO(this->get_logger(),
-            "FAST_RETRACT → TILT_DOWN: retracted=%s elapsed=%.3f",
-            allMotorsAtZero() ? "true" : "false", elapsed);
+            "快速收拍 → 俯仰下压：已回零=%s 耗时=%.3f s",
+            allMotorsAtZero() ? "是" : "超时", elapsed);
         state_ = State::TILT_DOWN;
         state_enter_time_ = this->now();
       }
@@ -488,61 +604,42 @@ void DeltaArmManager::controlLoop()
     }
 
     case State::TILT_DOWN: {
+      // 三路锁零点、俯仰抬到击球位；挥拍(windmill 开火)由 maybeTriggerStrike 按 launch 计时独立发。
+      // 一旦已发过开火（挥拍时机到），立即进 WAIT_WIND_DONE 等 windmill 打完——不再被抬俯仰时长卡住。
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, retract_torque_ff_, retract_kp_, retract_kd_);
       }
-      publishTiltCommand(tilt_down_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
+      tiltCommand(tilt_down_angle_rad_, dt);
 
+      const bool fired = maybeTriggerStrike();
       const double elapsed = (this->now() - state_enter_time_).seconds();
-      if (tiltReached(tilt_down_angle_rad_) || elapsed >= tilt_timeout_s_) {
-        const double modeled_delay = std::max(0.0, estimated_fall_time_s_ + strike_timing_offset_s_);
-        const double strike_delay = strike_delay_override_s_ >= 0.0 ? strike_delay_override_s_ : modeled_delay;
+      if (fired || elapsed >= tilt_timeout_s_) {
+        if (!strike_trigger_sent_) { maybeTriggerStrike(/*force=*/true); }  // 抬俯仰超时兜底强发
+        state_ = State::WAIT_WIND_DONE;
+        state_enter_time_ = this->now();
+      }
+      break;
+    }
+
+    case State::WAIT_WIND_DONE: {
+      // 保持三路在零点、俯仰在击球位，等 windmill 打完接住 + 重力归零全部完成再回摆。
+      // windmill 击球后循环：FIRE → FREE_WHEEL → CATCH → GRAVITY_HOMING → WIND_UP。
+      // "完毕" = 观察到 CATCH（接住）后，windmill 完成重力归零、重新引拍进入 WIND_UP。
+      // 用 WIND_UP 而非"离开 CATCH"做判据：离开 CATCH 只是进入 GRAVITY_HOMING（重力归零刚开始），
+      // 此时归零尚未完成；WIND_UP 才代表重力归零已完成（handleGravityHoming 归零完才 → WIND_UP）。
+      for (size_t i = 0; i < 3; ++i) {
+        publishCommand(i, zero_positions_[i], 0.0, 0.0, kp_, kd_);
+      }
+      tiltCommand(tilt_down_angle_rad_, dt);
+
+      if (wind_status_ == "CATCH") {
+        wind_catch_seen_ = true;
+      }
+      const bool wind_done = wind_catch_seen_ && wind_status_ == "WIND_UP";
+      const double elapsed = (this->now() - state_enter_time_).seconds();
+      if (wind_done || elapsed >= wind_done_timeout_s_) {
         RCLCPP_INFO(this->get_logger(),
-            "TILT_DOWN → WAIT_STRIKE: tilt_reached=%s elapsed=%.3f strike_delay=%.3f modeled=%.3f",
-            tiltReached(tilt_down_angle_rad_) ? "true" : "false",
-            elapsed, strike_delay, modeled_delay);
-        state_ = State::WAIT_STRIKE;
-        state_enter_time_ = this->now();
-      }
-      break;
-    }
-
-    case State::WAIT_STRIKE: {
-      for (size_t i = 0; i < 3; ++i) {
-        publishCommand(i, zero_positions_[i], 0.0, retract_torque_ff_, retract_kp_, retract_kd_);
-      }
-      publishTiltCommand(tilt_down_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
-
-      const double modeled_delay = std::max(0.0, estimated_fall_time_s_ + strike_timing_offset_s_);
-      const double strike_delay = strike_delay_override_s_ >= 0.0 ? strike_delay_override_s_ : modeled_delay;
-      // elapsed 从 launch_time_（上抛完成瞬间）算起，而非从进入 WAIT_STRIKE 起。
-      // 若 retract+tilt 总耗时已超过 strike_delay，进入本状态后立即触发——这是预期行为。
-      // 若需要更长延时，将 strike_delay_override_s_ 设为 retract_timeout_s_ + tilt_timeout_s_ 以上。
-      const double elapsed_since_launch = (this->now() - launch_time_).seconds();
-      if (elapsed_since_launch >= strike_delay) {
-        state_ = State::TRIGGER_STRIKE;
-        state_enter_time_ = this->now();
-      }
-      break;
-    }
-
-    case State::TRIGGER_STRIKE: {
-      for (size_t i = 0; i < 3; ++i) {
-        publishCommand(i, zero_positions_[i], 0.0, retract_torque_ff_, retract_kp_, retract_kd_);
-      }
-      publishTiltCommand(tilt_down_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
-
-      auto trigger = std_msgs::msg::Bool();
-      trigger.data = true;
-      serve_trigger_pub_->publish(trigger);
-
-      if (!strike_trigger_sent_) {
-        strike_trigger_sent_ = true;
-        strike_trigger_time_ = this->now();
-        RCLCPP_INFO(this->get_logger(), "已触发 /serve/trigger，等待 %.3f s 后恢复 READY", strike_trigger_pulse_s_);
-      }
-
-      if ((this->now() - strike_trigger_time_).seconds() >= strike_trigger_pulse_s_) {
+            "windmill 完毕(%s) → 俯仰回摆", wind_done ? "接住+重力归零完成" : "超时兜底");
         state_ = State::RECOVER_READY;
         state_enter_time_ = this->now();
       }
@@ -553,7 +650,7 @@ void DeltaArmManager::controlLoop()
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, 0.0, kp_, kd_);
       }
-      publishTiltCommand(tilt_ready_angle_rad_, 0.0, tilt_torque_ff_, tilt_kp_, tilt_kd_);
+      tiltCommand(tilt_ready_angle_rad_, dt);
       planned_deltas_rad_.fill(0.0);
       current_planned_vels_.fill(0.0);
       target_deltas_rad_.fill(0.0);
@@ -611,10 +708,34 @@ bool DeltaArmManager::allMotorsAtZero() const
 
 bool DeltaArmManager::tiltReached(double target_rad) const
 {
-  if (!has_tilt_feedback_ || !tilt_online_) {
+  if (!has_tilt_feedback_ || !tilt_online_ || !tilt_zero_captured_) {
     return false;
   }
-  return std::abs(target_rad - tilt_position_) <= tilt_position_tolerance_;
+  const double logical_pos = tilt_position_ - tilt_zero_position_;
+  return std::abs(target_rad - logical_pos) <= tilt_position_tolerance_;
+}
+
+bool DeltaArmManager::maybeTriggerStrike(bool force)
+{
+  if (strike_trigger_sent_) {
+    return true;
+  }
+  const double modeled_delay = std::max(0.0, estimated_fall_time_s_ + strike_timing_offset_s_);
+  const double strike_delay = strike_delay_override_s_ >= 0.0 ? strike_delay_override_s_ : modeled_delay;
+  const double elapsed = (this->now() - launch_time_).seconds();
+  if (!force && elapsed < strike_delay) {
+    return false;
+  }
+  auto trigger = std_msgs::msg::Bool();
+  trigger.data = true;
+  serve_trigger_pub_->publish(trigger);
+  strike_trigger_sent_ = true;
+  strike_trigger_time_ = this->now();
+  wind_catch_seen_ = false;  // 复位本次发球的 CATCH 观测
+  RCLCPP_INFO(this->get_logger(),
+      "已触发 /serve/trigger（挥拍），launch 后 %.3f s（strike_delay=%.3f 模型=%.3f）",
+      elapsed, strike_delay, modeled_delay);
+  return true;
 }
 
 double DeltaArmManager::estimateLaunchHeight(double delta_rad) const
@@ -638,19 +759,41 @@ void DeltaArmManager::enterFastRetract()
 {
   launch_time_ = this->now();
   state_enter_time_ = launch_time_;
-  // 反向规划器从当前物理位置（顶点）出发，规划回相对 0；速度前馈从 0 起步、按加速度上限爬升
+  // 三路同步收拍：共享规划轨迹从"最高（最落后）那路"的实际位置起步，速度前馈从 0 爬升。
+  // 用最高者做起点，避免一进收拍就把已经较低的电机往上提。
+  double start_actual = 0.0;
+  bool any_fb = false;
   for (size_t i = 0; i < 3; ++i) {
-    planned_deltas_rad_[i] = has_feedback_[i]
-        ? current_positions_[i] - zero_positions_[i]
-        : target_deltas_rad_[i];
+    if (has_feedback_[i]) {
+      const double ad = current_positions_[i] - zero_positions_[i];
+      if (!any_fb || ad > start_actual) { start_actual = ad; any_fb = true; }
+    }
+  }
+  if (!any_fb) start_actual = target_deltas_rad_[0];
+  for (size_t i = 0; i < 3; ++i) {
+    planned_deltas_rad_[i] = start_actual;   // [0] 作共享量，三路一致
     current_planned_vels_[i] = 0.0;
     target_deltas_rad_[i] = 0.0;
   }
   state_ = State::FAST_RETRACT;
 
   RCLCPP_INFO(this->get_logger(),
-      "进入 FAST_RETRACT：三路上抛电机立即回相对 0；测试估算高度 %.3f m，下落时间 %.3f s",
+      "进入快速收拍：三路电机回零点，估算高度 %.3f m，下落时间 %.3f s",
       estimated_launch_height_m_, estimated_fall_time_s_);
+
+  // 收拍卡顿定位：打印 CSV 表头，后续每周期一行。用法：
+  //   ros2 run ... delta_arm_manager 2>&1 | grep RETRACT_CSV > retract.csv
+  // 字段：pd=规划增量 ad=实际增量 terr=跟踪误差(pd-ad) pv=规划速度 av=实际速度
+  //       tilt_cmd/pos/vel=俯仰命令角/反馈角/反馈速度；卡顿时刻看 terr 突增(电机跟不上)
+  //       还是 tilt_vel 峰值同步(俯仰耦合)。
+  if (retract_debug_log_) {
+    RCLCPP_INFO(this->get_logger(),
+        "RETRACT_CSV,t,"
+        "m1_pd,m1_ad,m1_terr,m1_pv,m1_av,"
+        "m2_pd,m2_ad,m2_terr,m2_pv,m2_av,"
+        "m3_pd,m3_ad,m3_terr,m3_pv,m3_av,"
+        "tilt_cmd,tilt_pos,tilt_vel");
+  }
 }
 
 void DeltaArmManager::publishReady()
@@ -691,9 +834,31 @@ void DeltaArmManager::publishCommand(size_t idx,
   cmd_pub_->publish(cmd);
 }
 
-void DeltaArmManager::publishTiltCommand(double pos_des, double vel_des, double torque_ff,
+void DeltaArmManager::tiltCommand(double target_rel, double dt)
+{
+  // 简化俯仰：命令角按单一 rate 限速滑向目标角 + 恒定向上前馈托住臂自重 + 单一 PD。
+  // 一直挂 tilt_hold_ff_（向上）抵消臂重后，抬起和回摆对称，不再分 raise/return 两套逻辑。
+  const double step = tilt_rate_rad_s_ * dt;
+  const double err = target_rel - tilt_cmd_angle_;
+  double cmd_vel;
+  if (std::abs(err) <= step) {
+    tilt_cmd_angle_ = target_rel;
+    cmd_vel = 0.0;
+  } else {
+    tilt_cmd_angle_ += std::copysign(step, err);
+    cmd_vel = std::copysign(tilt_rate_rad_s_, err);  // 速度前馈随滑动方向
+  }
+  publishTiltCommand(tilt_cmd_angle_, cmd_vel, tilt_hold_ff_, tilt_kp_, tilt_kd_);
+}
+
+void DeltaArmManager::publishTiltCommand(double angle_rel, double vel_des, double torque_ff,
     double kp, double kd)
 {
+  // 零点未锁定前不发俯仰命令：此时坐标系未知，发 0.0 会把电机往上电原点硬拉（异响根源）
+  if (!tilt_zero_captured_) {
+    return;
+  }
+  const double pos_des = tilt_zero_position_ + angle_rel;
   double clamped_pos = pos_des;
   if (has_tilt_feedback_ && tilt_max_position_error_ > 0.0) {
     const double error = pos_des - tilt_position_;
