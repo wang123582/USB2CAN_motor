@@ -57,7 +57,7 @@ RCUsbControlNode::RCUsbControlNode()
     mode_switch_field_.c_str(), manual_switch_, estop_switch_, vision_switch_);
   RCLCPP_INFO(
     get_logger(),
-    "遥控映射: lx->linear.x(右/左) ly->linear.y(前/后) rx->angular.z, 视觉输入=%s",
+    "遥控映射(REP-103): ly->linear.x(前+) lx->-linear.y(右推=右移) rx->angular.z, 视觉输入=%s",
     enable_vision_passthrough_ ? vision_cmd_vel_topic_.c_str() : "disabled");
 }
 
@@ -573,8 +573,13 @@ uint8_t RCUsbControlNode::modeSwitchValue(const RcForwardFrame& frame) const
 
 geometry_msgs::msg::Twist RCUsbControlNode::commandFromFrame(const RcForwardFrame& frame) const
 {
-  double linear_x = normalizeAxis(frame.lx) * max_linear_velocity_;
-  double linear_y = normalizeAxis(frame.ly) * max_linear_velocity_;
+  // REP-103 标准约定（与舵轮运动学 atan2(vy,vx) 一致）：
+  //   linear.x = 前后（前推 ly 为正 → 前进，转向角 0°）
+  //   linear.y = 左右（左正；lx 右推为正 → 取负得右移）
+  // 旧映射 lx->x / ly->y 是全向轮时代的开环语义，接舵轮后会把
+  // “前进”解释成横移，导致转向轮打 90°。
+  double linear_x = normalizeAxis(frame.ly) * max_linear_velocity_;
+  double linear_y = -normalizeAxis(frame.lx) * max_linear_velocity_;
   double angular_z = normalizeAxis(frame.rx) * max_angular_velocity_;
 
   if (invert_linear_x_) {

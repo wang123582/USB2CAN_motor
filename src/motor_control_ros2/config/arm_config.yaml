@@ -76,27 +76,10 @@ decoupled_zero_rad: 0.0
 # EXECUTE 超时（秒）：上抛阶段超时后强制快速收拍
 top_idle_timeout: 1.0
 
-# 发球测试流程参数
+# 运动流程超时参数
 serve_test:
-  # 机械臂几何尺寸：只用于测试估算球高度/下落时间，不参与闭环判断
-  arm_lower_length_m: 0.160
-  arm_upper_length_m: 0.230
-  gravity_mps2: 9.81
-  # 击球平面比释放点低多少米；先设 0，录像后调整
-  strike_plane_drop_m: 0.0
-  # 下落时间模型偏移；正数晚打，负数早打
-  timing_offset_s: 0.0
-  # 挥拍时机：launch(上抛完成/球出手)后过此秒数就发 windmill 开火——现已与收拍/抬俯仰进度解耦，
-  # 直接生效（不再被"收拍+抬俯仰"总时长卡住）。windmill 从开火到撞球约 +0.267s，故实际击球≈本值+0.267s。
-  # 越小挥拍越早。>=0 用此固定值（模型时间只打印）；设 -1 才用模型 estimated_fall_time。
-  strike_delay_override_s: 0.20
-  # 快速收拍/俯仰躺下的测试超时
-  retract_timeout_s: 0.30
-  tilt_timeout_s: 0.70          # ↑ 给俯仰下压留余量（原 0.50 每次超时）；提速后应能提前到位
-  strike_trigger_pulse_s: 0.05
-  # windmill 联调：触发开火后等 windmill 打完整循环(见过 CATCH 又离开=接住完毕)俯仰才回摆；
-  # 此为超时兜底(s)，防 windmill 掉线/没跑起来时 delta 卡在 WAIT_WIND_DONE。
-  wind_done_timeout_s: 8.0
+  retract_timeout_s: 0.30       # 快速收拍超时（s）
+  tilt_timeout_s: 0.70          # 俯仰运动超时（s）
 
 # 快速收拍参数：三路上抛电机反向梯形规划回相对 0 度
 # 速度优先：max_velocity/accel 可高于 execute 段；位置钳位对收拍关闭（代码内 bypass）
@@ -116,16 +99,14 @@ retract:
   debug_log: false     # 收拍逐周期数据记录（定位卡顿用）；调完置 false 关掉
                       # 抓取：ros2 run ... delta_arm_manager 2>&1 | grep RETRACT_CSV > retract.csv
 
-# 俯仰 GO8010：先给测试值，实机调试时改 down_angle_rad 和增益
+# 俯仰 GO8010
 # 零点：节点收到首帧在线反馈时锁定当前物理角为零点，以下角度均为相对零点
 # （上电/启动节点前务必让俯仰处于躺平待机位）
-# 方向：正角/正力矩 = 向上抬起（0=躺平 → down_angle=抬到击球角）；
-#       松力矩臂会靠重力掉回 0，故保持在击球角需 +（向上）前馈托住。
-# 注：down_angle_rad 名字沿用历史，实际是"向上抬到击球角"，非下压。
+# 方向：正角/正力矩 = 向上抬起（0=躺平）；松力矩臂会靠重力掉回 0，需 +（向上）前馈托住。
+# 击球角由上层 ArmTarget topic 的 tilt_angle_rad 字段实时指定，此处不配置。
 tilt:
   name: "arm_tilt_motor"       # joint_name，对应 motors.yaml arm_tilt_motor
   ready_angle_rad: 0.0         # 待机角度（rad，相对零点）：机械臂躺平位置
-  down_angle_rad: 3.6          # 击球角度（rad，相对零点）：向上抬到击球倾角
   # ===== 简化俯仰：一直挂恒定向上前馈托住臂自重 + 单一 PD，抬起/回摆共用一套 =====
   kp: 2.0                      # 单一位置增益（抬起/回摆共用）
   kd: 0.30                     # 单一速度阻尼

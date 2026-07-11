@@ -35,6 +35,7 @@ add_library(motor_control_lib
   src/hardware/config_parser.cpp
   src/hardware/serial_interface.cpp
   src/kinematics/omni_wheel_kinematics.cpp
+  src/kinematics/steer_wheel_kinematics.cpp
   src/motors/dji_motor.cpp
   src/motors/unitree_motor_native.cpp
 )
@@ -69,8 +70,6 @@ target_link_libraries(omni_chassis_control_node
 ament_target_dependencies(omni_chassis_control_node
   ament_index_cpp
   geometry_msgs
-  nav_msgs
-  rcl_interfaces
   rclcpp
   std_msgs
 )
@@ -107,19 +106,6 @@ ament_target_dependencies(motor_monitor_node
   rclcpp
 )
 
-add_executable(serve_windmill_manager
-  src/nodes/serve_windmill_manager.cpp
-)
-target_link_libraries(serve_windmill_manager
-  yaml-cpp
-  "${cpp_typesupport_target}"
-)
-ament_target_dependencies(serve_windmill_manager
-  ament_index_cpp
-  rclcpp
-  std_msgs
-)
-
 install(TARGETS
   motor_control_lib
   motor_control_node
@@ -127,7 +113,6 @@ install(TARGETS
   motor_monitor_node
   omni_chassis_control_node
   rc_usb_control_node
-  serve_windmill_manager
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

@@ -1,93 +1,46 @@
-omni_chassis_control_node:
+chassis_control_node:
   ros__parameters:
     control_frequency: 100.0        # 控制循环频率（Hz）
     cmd_vel_topic: "/cmd_vel"       # 订阅速度指令话题（geometry_msgs/Twist）
-    cmd_pose_topic: "/cmd_pose"     # 订阅位姿指令话题（geometry_msgs/Pose2D）
-    odom_topic: "/odom"             # 发布里程计话题（nav_msgs/Odometry）
-    estop_topic: "/chassis/estop"   # 急停话题（std_msgs/Bool），true 时底盘输出清零
-    default_mode: "velocity"        # 默认控制模式：velocity / position
+    cmd_timeout: 0.5                # 速度指令超时（s），超时后底盘停止
 
-    # open_loop:   遥控速度直接做逆运动学 → 轮速，不依赖里程计反馈
-    # closed_loop: 使用 /odom.twist + velocity_pid_* 做速度闭环
-    velocity_control_mode: "open_loop"
+    # ── 底盘机械参数 ───────────────────────────────────────────────────
+    # 布局：矩形四舵轮
+    #   FL (左前): (+lx, +ly)    FR (右前): (+lx, -ly)
+    #   RL (左后): (-lx, +ly)    RR (右后): (-lx, -ly)
+    wheel_base_x: 0.650   # 前后轴距（m），需根据实际测量填写
+    wheel_base_y: 0.620   # 左右轮距（m），需根据实际测量填写
+    wheel_radius:  0.05  # 驱动轮半径（m），需根据实际填写
+    drive_gear_ratio: 19.0  # GM3508 内置减速比（固定 19:1，无需修改）
 
-    # ── 底盘机械参数 ────────────────────────────────────────────
-    wheel_base_x: 0.88      # 前后轮轴距的一半（m），即轮组中心到底盘中心 X 方向距离
-    wheel_base_y: 0.88      # 左右轮轴距的一半（m），即轮组中心到底盘中心 Y 方向距离
-    wheel_radius: 0.1062    # 麦克纳姆轮半径（m）
-    install_angle: 45.0     # 轮子安装角（度），标准麦克纳姆轮为 45°
-
-    # ── 速度限幅 ────────────────────────────────────────────────
+    # ── 速度限幅 ──────────────────────────────────────────────────────
     max_linear_velocity: 2.0    # 线速度上限（m/s）
-    max_angular_velocity: 2.0   # 角速度上限（rad/s）
-    cmd_timeout: 0.5            # 速度指令超时（s），超时后底盘停止
-    zero_target_deadband: 0.001 # 速度指令死区（m/s 或 rad/s），小于此值视为零
+    max_angular_velocity: 3.0   # 角速度上限（rad/s）
 
-    # ── 位置模式参数 ────────────────────────────────────────────
-    position_timeout: 1.0       # 位置控制超时（s）
-    goal_tolerance_xy: 0.02     # XY 到位容差（m）
-    goal_tolerance_yaw: 0.05    # 偏航到位容差（rad）
+    # ── 左前轮 (FL) ───────────────────────────────────────────────────
+    fl_steer_motor: "DJI6020_3"   # GM6020 转向电机（motors.yaml 中的 joint_name），左前=3号
+    fl_drive_motor: "DJI3508_3"   # GM3508 驱动电机，左前=3号
+    fl_steer_offset: 295.9   # 编码器零位偏移（度）：正前方时电机编码器示数；上电标定后填入
+    fl_steer_direction: -1  # 实测 GM6020 编码器正方向为顺时针（俯视），与运动学 CCW 约定相反：横移左右颠倒+自转呈 X 形（径向），四轮统一取反
+    fl_drive_direction: -1  # 左侧轮组镜像安装：实测前进命令下左侧向后滚，取反
 
-    # ── 电机绑定（joint_name 对应 motors.yaml）──────────────────
-    fl_motor: "DJI3508_1"   # 左前轮
-    fr_motor: "DJI3508_2"   # 右前轮
-    rl_motor: "DJI3508_3"   # 左后轮
-    rr_motor: "DJI3508_4"   # 右后轮
-
-    # 驱动方向：+1 正转 / -1 反转（根据电机安装方向调整）
-    fl_drive_direction: 1
+    # ── 右前轮 (FR) ───────────────────────────────────────────────────
+    fr_steer_motor: "DJI6020_4"   # 右前=4号
+    fr_drive_motor: "DJI3508_4"
+    fr_steer_offset: 301.2
+    fr_steer_direction: -1  # 同 FL，编码器方向取反
     fr_drive_direction: 1
-    rl_drive_direction: 1
+
+    # ── 左后轮 (RL) ───────────────────────────────────────────────────
+    rl_steer_motor: "DJI6020_2"   # 左后=2号
+    rl_drive_motor: "DJI3508_2"
+    rl_steer_offset: 358.6
+    rl_steer_direction: -1  # 同 FL，编码器方向取反
+    rl_drive_direction: -1  # 左侧轮组镜像安装，同 FL 取反
+
+    # ── 右后轮 (RR) ───────────────────────────────────────────────────
+    rr_steer_motor: "DJI6020_1"   # 右后=1号
+    rr_drive_motor: "DJI3508_1"
+    rr_steer_offset: 240.1
+    rr_steer_direction: -1  # 同 FL，编码器方向取反
     rr_drive_direction: 1
-
-    # ── 速度闭环 PID（仅 closed_loop 模式生效）──────────────────
-    # 各轴独立 PID，输入为速度误差（m/s 或 rad/s），输出为速度修正量
-    velocity_pid_x:
-      kp: 2.0
-      ki: 0.2
-      kd: 0.0
-      i_max: 1.0      # 积分限幅（m/s）
-      out_max: 2.0    # 输出限幅（m/s）
-      dead_zone: 0.0  # 死区（m/s）
-
-    velocity_pid_y:
-      kp: 2.0
-      ki: 0.2
-      kd: 0.0
-      i_max: 1.0
-      out_max: 2.0
-      dead_zone: 0.0
-
-    velocity_pid_yaw:
-      kp: 2.5
-      ki: 0.1
-      kd: 0.0
-      i_max: 1.0
-      out_max: 2.0
-      dead_zone: 0.0
-
-    # ── 位置闭环 PID（position 模式生效）────────────────────────
-    # 输入为位置误差（m 或 rad），输出为目标速度（m/s 或 rad/s）
-    position_pid_x:
-      kp: 1.2
-      ki: 0.0
-      kd: 0.0
-      i_max: 0.0
-      out_max: 1.0     # 位置环输出限幅即最大速度（m/s）
-      dead_zone: 0.005
-
-    position_pid_y:
-      kp: 1.2
-      ki: 0.0
-      kd: 0.0
-      i_max: 0.0
-      out_max: 1.0
-      dead_zone: 0.005
-
-    position_pid_yaw:
-      kp: 2.0
-      ki: 0.0
-      kd: 0.0
-      i_max: 0.0
-      out_max: 1.5
-      dead_zone: 0.01

@@ -14,6 +14,8 @@
 - [x] config_fix：修复构造函数默认值 / catch 静默吞异常 / motor_ids_ 冲突 → tasks/config_fix.md
 - [x] name_routing：按 joint_name 路由 GO8010 命令，arm_config.yaml 删除冗余 device/id → tasks/config_fix.md
 - [x] retract_speedup：收拍回落提速（取消钳位 + 反向梯形规划速度前馈 + 激进 retract 参数）
+- [x] tilt_in_topic：俯仰目标角纳入 ArmTarget topic（新增 tilt_angle_rad 字段，完全由 topic 决定，删除 config down_angle_rad）
+- [x] tilt_aim_first：击球逻辑重排，先俯仰瞄准（TILT_AIM，反馈到位确认）再上抛击球，删除旧 TILT_DOWN 状态
 
 ---
 
