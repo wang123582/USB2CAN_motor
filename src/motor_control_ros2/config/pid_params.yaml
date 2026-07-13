@@ -14,7 +14,7 @@ dji_motors:
       i_max: 50.0        # 积分限幅 (RPM)
       out_max: 700.0     # 输出限幅 (目标 RPM)
       dead_zone: 0.1       # 位置死区
-    
+
     # 速度环 (内环) - 单位: RPM
     velocity_pid:
       kp: 40.0           # 与 Python speed_pid 一致

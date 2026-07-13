@@ -16,6 +16,11 @@ SystemConfig ConfigParser::loadConfig(const std::string& config_file) {
         config.can_interfaces.push_back(parseCANInterface(interface_node));
       }
     }
+    if (yaml["serial_interfaces"]) {
+      for (const auto& interface_node : yaml["serial_interfaces"]) {
+        config.serial_interfaces.push_back(parseSerialInterface(interface_node));
+      }
+    }
   } catch (const YAML::Exception& e) {
     throw std::runtime_error("YAML 解析错误: " + std::string(e.what()));
   }
@@ -43,6 +48,15 @@ MotorConfig ConfigParser::parseMotorConfig(const YAML::Node& node) {
   if (node["mirror_from"]) {
     config.mirror_from = node["mirror_from"].as<std::string>();
   }
+  if (node["gear_ratio"]) {
+    config.gear_ratio = node["gear_ratio"].as<double>();
+  }
+  if (node["k_pos"]) {
+    config.k_pos = node["k_pos"].as<double>();
+  }
+  if (node["k_spd"]) {
+    config.k_spd = node["k_spd"].as<double>();
+  }
 
   return config;
 }
@@ -56,6 +70,28 @@ CANInterfaceConfig ConfigParser::parseCANInterface(const YAML::Node& node) {
 
   config.device = node["device"].as<std::string>();
   config.baudrate = node["baudrate"].as<int>();
+
+  if (node["motors"]) {
+    for (const auto& motor_node : node["motors"]) {
+      config.motors.push_back(parseMotorConfig(motor_node));
+    }
+  }
+
+  return config;
+}
+
+SerialInterfaceConfig ConfigParser::parseSerialInterface(const YAML::Node& node) {
+  SerialInterfaceConfig config;
+
+  if (!node["device"] || !node["baudrate"]) {
+    throw std::runtime_error("串口接口配置必须包含 device/baudrate");
+  }
+
+  config.device = node["device"].as<std::string>();
+  config.baudrate = node["baudrate"].as<int>();
+  if (node["protocol"]) {
+    config.protocol = node["protocol"].as<std::string>();
+  }
 
   if (node["motors"]) {
     for (const auto& motor_node : node["motors"]) {

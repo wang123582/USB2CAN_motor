@@ -16,10 +16,15 @@ find_package(std_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/ArmTarget.msg"
   "msg/ControlFrequency.msg"
+  "msg/DamiaoMotorState.msg"
   "msg/DJIMotorCommand.msg"
   "msg/DJIMotorCommandAdvanced.msg"
   "msg/DJIMotorState.msg"
+  "msg/UnitreeGO8010Command.msg"
+  "msg/UnitreeGO8010State.msg"
+  "msg/UnitreeMotorState.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -28,8 +33,11 @@ include_directories(include)
 add_library(motor_control_lib
   src/hardware/can_interface.cpp
   src/hardware/config_parser.cpp
+  src/hardware/serial_interface.cpp
   src/kinematics/omni_wheel_kinematics.cpp
+  src/kinematics/steer_wheel_kinematics.cpp
   src/motors/dji_motor.cpp
+  src/motors/unitree_motor_native.cpp
 )
 
 target_link_libraries(motor_control_lib yaml-cpp)
@@ -62,8 +70,19 @@ target_link_libraries(omni_chassis_control_node
 ament_target_dependencies(omni_chassis_control_node
   ament_index_cpp
   geometry_msgs
-  nav_msgs
-  rcl_interfaces
+  rclcpp
+  std_msgs
+)
+
+add_executable(delta_arm_manager_node
+  src/nodes/delta_arm_manager_node.cpp
+)
+target_link_libraries(delta_arm_manager_node
+  yaml-cpp
+  "${cpp_typesupport_target}"
+)
+ament_target_dependencies(delta_arm_manager_node
+  ament_index_cpp
   rclcpp
   std_msgs
 )
@@ -77,18 +96,21 @@ ament_target_dependencies(rc_usb_control_node
   std_msgs
 )
 
-add_executable(vision_goal_tracker_node
-  src/nodes/vision_goal_tracker_node.cpp
+add_executable(motor_monitor_node
+  src/nodes/motor_monitor_node.cpp
 )
-ament_target_dependencies(vision_goal_tracker_node
-  geometry_msgs
-  nav_msgs
+target_link_libraries(motor_monitor_node
+  "${cpp_typesupport_target}"
+)
+ament_target_dependencies(motor_monitor_node
   rclcpp
 )
 
 install(TARGETS
   motor_control_lib
   motor_control_node
+  delta_arm_manager_node
+  motor_monitor_node
   omni_chassis_control_node
   rc_usb_control_node
   vision_goal_tracker_node
@@ -102,6 +124,10 @@ install(DIRECTORY include/
 )
 
 install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 

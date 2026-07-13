@@ -38,7 +38,7 @@ colcon build --packages-select motor_control_ros2 wheel_imu_ekf
 source install/setup.bash
 ```
 
-需要 rosbag/RViz 工具时额外构建：
+需要 rosbag/RViz 工具 时额外构建：
 
 ```bash
 colcon build --packages-select rviz_bag_tools

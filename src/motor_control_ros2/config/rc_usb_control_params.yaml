@@ -3,7 +3,7 @@
 # 24 字节固定帧，0xA55A，小端，CRC16/Modbus。
 rc_usb_control_node:
   ros__parameters:
-    serial_port: "/dev/robocon_rc"
+    serial_port: "/dev/ttyACM2"
     baud_rate: 115200
 
     cmd_vel_topic: "/cmd_vel"
@@ -17,27 +17,26 @@ rc_usb_control_node:
     # rx: 右摇杆左右，右推为正，用于旋转
     # ry: 右摇杆前后，当前底盘控制未使用
     #
-    # 当前底盘开环控制语义:
-    # linear.x: 右/左平移速度
-    # linear.y: 前/后平移速度
-    # angular.z: 旋转角速度
+    # cmd_vel 使用 REP-103 标准约定（与舵轮运动学一致）:
+    # linear.x: 前后平移速度（前为正，转向角 0°=正前方）
+    # linear.y: 左右平移速度（左为正）
+    # angular.z: 旋转角速度（逆时针为正）
     #
-    # 实测修正:
-    # lx -> linear.x, ly -> linear.y, rx -> angular.z
-    axis_max: 660.0
-    deadzone: 0.05
-    max_linear_velocity: 1.5
-    max_angular_velocity: 2.0
-    invert_linear_x: false
-    invert_linear_y: false
-    invert_angular_z: false
+    # 映射: ly -> linear.x, lx -> -linear.y（右推=右移）, rx -> angular.z
+    # ⚠️ 旧的 lx->x/ly->y 映射是全向轮时代语义，接舵轮会把前进解释成横移（轮子打90°）
+    axis_max: 660.0             # 摇杆原始值满偏量程（归一化分母）
+    deadzone: 0.05              # 归一化后死区（0~1），小于此值输出零
+    max_linear_velocity: 0.5    # 线速度上限（m/s），摇杆满偏对应此速度
+    max_angular_velocity: 1.0   # 角速度上限（rad/s），摇杆满偏对应此角速度
+    invert_linear_x: false      # 是否翻转 X 轴方向
+    invert_linear_y: false      # 是否翻转 Y 轴方向
+    invert_angular_z: false     # 是否翻转旋转方向
 
-    publish_rate: 50.0
-    command_timeout: 0.3
-    vision_timeout: 0.3
-    diagnostics_interval_sec: 1.0
-    serial_stale_reconnect_sec: 2.0
-    publish_zero_before_first_frame: true
+    publish_rate: 50.0          # cmd_vel 发布频率（Hz）
+    command_timeout: 0.3        # 串口数据超时（s），超时后发送零速停车
+    vision_timeout: 0.3         # 视觉速度指令超时（s）
+    diagnostics_interval_sec: 1.0  # 诊断信息打印间隔（s）
+    publish_zero_before_first_frame: true  # 节点启动后未收到第一帧前先发零速
 
     # DJI DBUS 三档拨杆值: UP=1, MID=3, DOWN=2
     # 当前使用物理左拨杆，对应帧内 sw_left 字段。
