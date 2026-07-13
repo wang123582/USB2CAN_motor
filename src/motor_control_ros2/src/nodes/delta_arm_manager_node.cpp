@@ -1,5 +1,7 @@
 #include "motor_control_ros2/delta_arm_manager_node.hpp"
 #include <yaml-cpp/yaml.h>
+#include <thread>
+#include <chrono>
 
 DeltaArmManager::DeltaArmManager()
     : Node("delta_arm_manager"),
@@ -37,6 +39,7 @@ DeltaArmManager::DeltaArmManager()
       retract_bottom_soft_(0.35),
       retract_debug_log_(true),
       tilt_ready_angle_rad_(0.0),
+      tilt_ready_motor_rad_(0.0),
       tilt_kp_(2.0),
       tilt_kd_(0.30),
       tilt_hold_ff_(1.1),
@@ -44,12 +47,19 @@ DeltaArmManager::DeltaArmManager()
       tilt_position_tolerance_(0.05),
       tilt_max_position_error_(0.5),
       tilt_motor_name_("arm_tilt_motor"),
+      tilt_calib_valid_(false),
+      tilt_rest_tilt_deg_(0.0),
+      tilt_seat_torque_(0.3),
+      tilt_seat_duration_s_(0.5),
+      tilt_seat_kd_(0.05),
       tilt_position_(0.0),
       tilt_velocity_(0.0),
       tilt_online_(false),
       has_tilt_feedback_(false),
       tilt_zero_position_(0.0),
       tilt_zero_captured_(false),
+      tilt_seat_started_(false),
+      release_sent_(false),
       tilt_cmd_angle_(0.0),
       tilt_target_cmd_rad_(0.0)
 {
@@ -61,7 +71,7 @@ DeltaArmManager::DeltaArmManager()
   target_deltas_rad_.fill(0.0);
   planned_deltas_rad_.fill(0.0);
   current_planned_vels_.fill(0.0);
-  motor_max_deltas_.fill(1.567);  // 保守默认值：Motor3 最小实测行程
+  motor_max_deltas_.fill(1.344);  // 保守默认值：实测最大行程 77°（配置未提供时兜底）
   motor_names_ = {"arm_delta_motor_1", "arm_delta_motor_2", "arm_delta_motor_3"};
 
   // 加载配置文件
@@ -74,6 +84,13 @@ DeltaArmManager::DeltaArmManager()
     RCLCPP_ERROR(this->get_logger(), "配置文件加载失败，节点退出: %s", e.what());
     throw;
   }
+
+  // 待机位换算：物理倾角增量 → 电机角（标定表已在 loadConfig 中加载）。
+  // 零点仍是压底最低点，只是压底锁零后待机主动抬到该位、每次击球完也回该位。
+  tilt_ready_motor_rad_ = tiltRelToMotorRel(tilt_ready_angle_rad_);
+  RCLCPP_INFO(this->get_logger(),
+      "俯仰待机位：物理 +%.1f° → 电机 %.3f rad（零点=压底最低点不变）",
+      tilt_ready_angle_rad_ * 180.0 / M_PI, tilt_ready_motor_rad_);
 
   // 订阅 ArmTarget 命令
   target_sub_ = this->create_subscription<motor_control_ros2::msg::ArmTarget>(
@@ -105,6 +122,51 @@ DeltaArmManager::DeltaArmManager()
       control_frequency_,
       motor_names_[0].c_str(), motor_names_[1].c_str(), motor_names_[2].c_str());
   RCLCPP_INFO(this->get_logger(), "状态：初始化 → 进入软着陆流程");
+}
+
+DeltaArmManager::~DeltaArmManager()
+{
+  sendReleaseAll();
+}
+
+void DeltaArmManager::sendReleaseAll()
+{
+  if (!cmd_pub_ || release_sent_) {
+    return;
+  }
+  release_sent_ = true;
+  // 先停控制定时器，避免泄力帧和控制帧交错（泄力后又被 PD 命令覆盖）
+  if (control_timer_) {
+    control_timer_->cancel();
+  }
+  // 泄力：kp=kd=τ=0，电机进入自由状态。串口链路 4 路轮询较慢且可能丢帧，
+  // 重发 3 轮、每轮间隔 20ms，尽量保证每路都吃到至少一帧。
+  for (int round = 0; round < 3; ++round) {
+    for (size_t i = 0; i < 3; ++i) {
+      auto cmd = motor_control_ros2::msg::UnitreeGO8010Command();
+      cmd.header.stamp = this->now();
+      cmd.joint_name = motor_names_[i];
+      cmd.mode = motor_control_ros2::msg::UnitreeGO8010Command::MODE_FOC;
+      cmd.position_target = 0.0;
+      cmd.velocity_target = 0.0;
+      cmd.torque_ff = 0.0f;
+      cmd.kp = 0.0f;
+      cmd.kd = 0.0f;
+      cmd_pub_->publish(cmd);
+    }
+    auto tilt_cmd = motor_control_ros2::msg::UnitreeGO8010Command();
+    tilt_cmd.header.stamp = this->now();
+    tilt_cmd.joint_name = tilt_motor_name_;
+    tilt_cmd.mode = motor_control_ros2::msg::UnitreeGO8010Command::MODE_FOC;
+    tilt_cmd.position_target = 0.0;
+    tilt_cmd.velocity_target = 0.0;
+    tilt_cmd.torque_ff = 0.0f;
+    tilt_cmd.kp = 0.0f;
+    tilt_cmd.kd = 0.0f;
+    cmd_pub_->publish(tilt_cmd);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  RCLCPP_INFO(this->get_logger(), "已发送 4 路 GO8010 泄力命令（kp=kd=τ=0，重发 3 轮）");
 }
 
 // ========== 配置加载 ==========
@@ -198,13 +260,57 @@ void DeltaArmManager::loadConfig(const std::string& config_file)
   auto tilt = cfg["tilt"];
   if (tilt) {
     if (tilt["name"]) tilt_motor_name_ = tilt["name"].as<std::string>();
+    // 待机位：ready_tilt_rad = 相对压底零点的物理倾角增量（与 ArmTarget.tilt_angle_rad 同语义）
+    // 旧键 ready_angle_rad 兼容读取（0.0 时两种语义等价）
     if (tilt["ready_angle_rad"]) tilt_ready_angle_rad_ = tilt["ready_angle_rad"].as<double>();
+    if (tilt["ready_tilt_rad"])  tilt_ready_angle_rad_ = tilt["ready_tilt_rad"].as<double>();
     if (tilt["kp"]) tilt_kp_ = tilt["kp"].as<double>();
     if (tilt["kd"]) tilt_kd_ = tilt["kd"].as<double>();
     if (tilt["hold_torque_ff"]) tilt_hold_ff_ = tilt["hold_torque_ff"].as<double>();
     if (tilt["rate_rad_s"]) tilt_rate_rad_s_ = tilt["rate_rad_s"].as<double>();
     if (tilt["position_tolerance"]) tilt_position_tolerance_ = tilt["position_tolerance"].as<double>();
     if (tilt["max_position_error"]) tilt_max_position_error_ = tilt["max_position_error"].as<double>();
+    if (tilt["seat_torque_ff"])  tilt_seat_torque_     = tilt["seat_torque_ff"].as<double>();
+    if (tilt["seat_duration_s"]) tilt_seat_duration_s_ = tilt["seat_duration_s"].as<double>();
+    if (tilt["seat_kd"])         tilt_seat_kd_         = tilt["seat_kd"].as<double>();
+
+    // 杠杆标定表：[物理倾角°, 电机角°] 列表，按倾角升序排序后求电机 0° 交点（=压底位绝对倾角）
+    auto calib = tilt["calibration"];
+    if (calib && calib.IsSequence() && calib.size() >= 2) {
+      tilt_calib_.clear();
+      for (const auto& row : calib) {
+        tilt_calib_.emplace_back(row[0].as<double>(), row[1].as<double>());
+      }
+      std::sort(tilt_calib_.begin(), tilt_calib_.end());
+      // 求电机 0° 交点（电机角随倾角单调递减，符号翻转段内线性插值）
+      bool crossing_found = false;
+      for (size_t k = 0; k + 1 < tilt_calib_.size(); ++k) {
+        const double m1 = tilt_calib_[k].second, m2 = tilt_calib_[k + 1].second;
+        if ((m1 >= 0.0 && m2 <= 0.0) || (m1 <= 0.0 && m2 >= 0.0)) {
+          const double t1 = tilt_calib_[k].first, t2 = tilt_calib_[k + 1].first;
+          tilt_rest_tilt_deg_ = t1 + (0.0 - m1) * (t2 - t1) / (m2 - m1);
+          crossing_found = true;
+          break;
+        }
+      }
+      if (!crossing_found) {
+        // 表内无电机 0° 交点：取 |电机角| 最小的端点当压底位（表采集不含零点附近，需警惕）
+        tilt_rest_tilt_deg_ =
+            std::abs(tilt_calib_.front().second) < std::abs(tilt_calib_.back().second)
+                ? tilt_calib_.front().first : tilt_calib_.back().first;
+        RCLCPP_WARN(this->get_logger(),
+            "俯仰标定表内无电机 0° 交点，压底位倾角近似取 %.1f°，建议补采零点附近数据",
+            tilt_rest_tilt_deg_);
+      }
+      tilt_calib_valid_ = true;
+      RCLCPP_INFO(this->get_logger(),
+          "俯仰杠杆标定表加载：%zu 点，倾角域 [%.1f°, %.1f°]，压底位（电机0°）≈ %.2f°",
+          tilt_calib_.size(), tilt_calib_.front().first, tilt_calib_.back().first,
+          tilt_rest_tilt_deg_);
+    } else {
+      RCLCPP_WARN(this->get_logger(),
+          "俯仰未配置 calibration 标定表，tilt_angle_rad 将按电机角直传（旧语义）");
+    }
   }
 
   RCLCPP_INFO(this->get_logger(),
@@ -285,14 +391,17 @@ void DeltaArmManager::armTargetCallback(
     planned_deltas_rad_[i]   = 0.0;
     current_planned_vels_[i] = 0.0;
   }
-  // 俯仰目标角完全由 topic 决定，不使用 config 兜底
-  tilt_target_cmd_rad_ = std::isfinite(msg->tilt_angle_rad) ? msg->tilt_angle_rad : 0.0;
+  // 俯仰目标完全由 topic 决定：tilt_angle_rad = 相对压底位姿的物理倾角增量（rad，正=抬头），
+  // 查杠杆标定表换算成电机角，之后滑动/到位判定全在电机空间
+  const double tilt_rel_phys = std::isfinite(msg->tilt_angle_rad) ? msg->tilt_angle_rad : 0.0;
+  tilt_target_cmd_rad_ = tiltRelToMotorRel(tilt_rel_phys);
   // 先确定俯仰角度再击球：先进俯仰瞄准，到位确认后才上抛
   state_enter_time_ = this->now();
   state_ = State::TILT_AIM;
   RCLCPP_INFO(this->get_logger(),
-      "就绪 → 俯仰瞄准：俯仰目标 %.3f rad，到位后上抛 [%.3f, %.3f, %.3f] rad",
-      tilt_target_cmd_rad_, target_deltas_rad_[0], target_deltas_rad_[1], target_deltas_rad_[2]);
+      "就绪 → 俯仰瞄准：物理倾角 +%.1f° → 电机 %.3f rad，到位后上抛 [%.3f, %.3f, %.3f] rad",
+      tilt_rel_phys * 180.0 / M_PI, tilt_target_cmd_rad_,
+      target_deltas_rad_[0], target_deltas_rad_[1], target_deltas_rad_[2]);
 }
 
 void DeltaArmManager::motorStateCallback(
@@ -313,16 +422,7 @@ void DeltaArmManager::motorStateCallback(
     tilt_velocity_ = static_cast<double>(msg->velocity);
     tilt_online_ = msg->online;
     has_tilt_feedback_ = true;
-    // 俯仰零点解耦：GO8010 反馈是电机上电坐标系，首帧在线反馈时锁定当前物理角为零点，
-    // 之后 ready/down 角全部相对该零点（与三路 delta 的 zero_positions_ 同理）。
-    if (!tilt_zero_captured_ && msg->online) {
-      tilt_zero_position_ = tilt_position_;
-      tilt_cmd_angle_ = 0.0;
-      tilt_zero_captured_ = true;
-      RCLCPP_INFO(this->get_logger(),
-          "俯仰零点锁定：原始角 %.3f rad，ready=%.3f，击球角由 topic 指定",
-          tilt_zero_position_, tilt_ready_angle_rad_);
-    }
+    // 俯仰零点不再在首帧锁定：改由 controlLoop 压底找零流程锁定（杠杆机构需压实躺平支撑做基准）
   }
 }
 
@@ -331,6 +431,40 @@ void DeltaArmManager::motorStateCallback(
 void DeltaArmManager::controlLoop()
 {
   const double dt = 1.0 / control_frequency_;
+
+  // 俯仰压底找零（独立于状态机，零点锁定前 tiltCommand 不发命令）：
+  // 先施加向下前馈把臂压实到躺平支撑 seat_duration_s 秒，再锁当前角为相对零点。
+  // 杠杆机构对零点旷量敏感（40° 端被杠杆比 ~7 倍放大），压实保证每次上电基准一致。
+  if (!tilt_zero_captured_ && has_tilt_feedback_ && tilt_online_) {
+    if (!tilt_seat_started_) {
+      tilt_seat_started_ = true;
+      tilt_seat_start_time_ = this->now();
+      RCLCPP_INFO(this->get_logger(),
+          "俯仰压底找零：施加 %.2f Nm 向下前馈，%.2f s 后锁零",
+          tilt_seat_torque_, tilt_seat_duration_s_);
+    }
+    if ((this->now() - tilt_seat_start_time_).seconds() >= tilt_seat_duration_s_) {
+      tilt_zero_position_ = tilt_position_;
+      tilt_cmd_angle_ = 0.0;
+      tilt_zero_captured_ = true;
+      RCLCPP_INFO(this->get_logger(),
+          "俯仰零点锁定（压底完成）：原始角 %.3f rad%s",
+          tilt_zero_position_,
+          tilt_calib_valid_ ? "，物理倾角基准见标定表压底位" : "");
+    } else {
+      // 纯前馈下压 + 阻尼限速（kp=0 不做位置控制，零点未知不能发位置目标）
+      auto cmd = motor_control_ros2::msg::UnitreeGO8010Command();
+      cmd.header.stamp = this->now();
+      cmd.joint_name = tilt_motor_name_;
+      cmd.mode = motor_control_ros2::msg::UnitreeGO8010Command::MODE_FOC;
+      cmd.position_target = 0.0;
+      cmd.velocity_target = 0.0;
+      cmd.torque_ff = static_cast<float>(tilt_seat_torque_);
+      cmd.kp = 0.0f;
+      cmd.kd = static_cast<float>(tilt_seat_kd_);
+      cmd_pub_->publish(cmd);
+    }
+  }
 
   switch (state_) {
 
@@ -424,7 +558,7 @@ void DeltaArmManager::controlLoop()
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, 0, kp_, kd_);
       }
-      tiltCommand(tilt_ready_angle_rad_, dt);
+      tiltCommand(tilt_ready_motor_rad_, dt);
       break;
     }
 
@@ -593,7 +727,7 @@ void DeltaArmManager::controlLoop()
       for (size_t i = 0; i < 3; ++i) {
         publishCommand(i, zero_positions_[i], 0.0, 0.0, kp_, kd_);
       }
-      tiltCommand(tilt_ready_angle_rad_, dt);
+      tiltCommand(tilt_ready_motor_rad_, dt);
       planned_deltas_rad_.fill(0.0);
       current_planned_vels_.fill(0.0);
       target_deltas_rad_.fill(0.0);
@@ -711,6 +845,33 @@ void DeltaArmManager::publishCommand(size_t idx,
   cmd_pub_->publish(cmd);
 }
 
+double DeltaArmManager::tiltRelToMotorRel(double rel_tilt_rad)
+{
+  // 未标定：直传（旧电机角语义），保证表缺失时行为可预期
+  if (!tilt_calib_valid_) {
+    return rel_tilt_rad;
+  }
+  double abs_deg = tilt_rest_tilt_deg_ + rel_tilt_rad * 180.0 / M_PI;
+  const double lo = tilt_calib_.front().first;
+  const double hi = tilt_calib_.back().first;
+  if (abs_deg < lo || abs_deg > hi) {
+    RCLCPP_WARN(this->get_logger(),
+        "俯仰目标绝对倾角 %.1f° 超出标定域 [%.1f°, %.1f°]，已钳位", abs_deg, lo, hi);
+    abs_deg = std::clamp(abs_deg, lo, hi);
+  }
+  // 分段线性插值（表按倾角升序）
+  double motor_deg = tilt_calib_.back().second;
+  for (size_t k = 0; k + 1 < tilt_calib_.size(); ++k) {
+    const double t1 = tilt_calib_[k].first,      m1 = tilt_calib_[k].second;
+    const double t2 = tilt_calib_[k + 1].first,  m2 = tilt_calib_[k + 1].second;
+    if (abs_deg <= t2) {
+      motor_deg = m1 + (m2 - m1) * (abs_deg - t1) / (t2 - t1);
+      break;
+    }
+  }
+  return motor_deg * M_PI / 180.0;
+}
+
 void DeltaArmManager::tiltCommand(double target_rel, double dt)
 {
   // 简化俯仰：命令角按单一 rate 限速滑向目标角 + 恒定向上前馈托住臂自重 + 单一 PD。
@@ -763,6 +924,9 @@ int main(int argc, char** argv)
   rclcpp::init(argc, argv);
   auto node = std::make_shared<DeltaArmManager>();
   rclcpp::spin(node);
+  // Ctrl+C 后 spin 返回：显式泄力（析构里也会兜底调用，重复发无害）。
+  // 注意 motor_control_node 必须还活着才能把泄力帧转发到串口——先关本节点、后关驱动节点。
+  node->sendReleaseAll();
   rclcpp::shutdown();
   return 0;
 }

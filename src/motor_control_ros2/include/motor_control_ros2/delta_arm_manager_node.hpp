@@ -14,6 +14,8 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <utility>
 
 /**
  * @brief Delta 机械臂管理器节点
@@ -30,6 +32,10 @@
 class DeltaArmManager : public rclcpp::Node {
 public:
   DeltaArmManager();
+  // 析构时向 3 路 delta + 俯仰共 4 路 GO8010 发泄力命令（kp=kd=τ=0），
+  // 防止节点退出后电机保持最后一帧 PD 增益顶着机械结构（震动/发热）
+  ~DeltaArmManager() override;
+  void sendReleaseAll();
 
 private:
   // ========== 状态机 ==========
@@ -57,6 +63,9 @@ private:
   void publishTiltCommand(double angle_rel, double vel_des, double torque_ff,
                           double kp, double kd);
   void tiltCommand(double target_rel, double dt);
+  // 杠杆坐标变换：相对物理倾角（rad，相对压底零点位姿，正=抬头）→ 电机相对零点角（rad）
+  // 查 tilt_calib_ 分段线性插值；超出标定域钳位并 WARN；未标定时直传（退回旧电机角语义）
+  double tiltRelToMotorRel(double rel_tilt_rad);
   bool allMotorsLanded() const;
   bool allMotorsAtZero() const;
   void enterFastRetract();
@@ -123,7 +132,8 @@ private:
   double retract_max_acceleration_;
   double retract_bottom_soft_;
   bool retract_debug_log_;
-  double tilt_ready_angle_rad_;
+  double tilt_ready_angle_rad_;  // 待机位（相对压底零点的物理倾角增量 rad，配置 ready_tilt_rad）
+  double tilt_ready_motor_rad_;  // 待机位换算后的电机角（构造时查表求出，READY/RECOVER 用这个）
   double tilt_kp_;
   double tilt_kd_;
   double tilt_hold_ff_;
@@ -132,6 +142,15 @@ private:
   double tilt_max_position_error_;
   std::string tilt_motor_name_;
 
+  // ========== 俯仰杠杆标定 & 压底找零 ==========
+  // 标定表：[物理倾角°, 电机相对零点角°]，按倾角升序；电机角随倾角单调递减（抬头=电机负方向）
+  std::vector<std::pair<double, double>> tilt_calib_;
+  bool tilt_calib_valid_;
+  double tilt_rest_tilt_deg_;    // 压底零点位对应的绝对物理倾角（表中电机 0° 交点，加载时求出）
+  double tilt_seat_torque_;      // 压底找零前馈力矩（Nm，正=向下压向躺平支撑）
+  double tilt_seat_duration_s_;  // 压底持续时间（s），到时锁定当前角为相对零点
+  double tilt_seat_kd_;          // 压底阶段阻尼
+
   // ========== 俯仰电机反馈 ==========
   double tilt_position_;
   double tilt_velocity_;
@@ -139,8 +158,11 @@ private:
   bool has_tilt_feedback_;
   double tilt_zero_position_;
   bool tilt_zero_captured_;
+  bool tilt_seat_started_;
+  rclcpp::Time tilt_seat_start_time_;
+  bool release_sent_;  // 泄力命令已发（防 main 显式调用 + 析构兜底重复执行）
   double tilt_cmd_angle_;
-  double tilt_target_cmd_rad_;  // 本次执行的俯仰目标角，完全由 ArmTarget topic 的 tilt_angle_rad 字段决定
+  double tilt_target_cmd_rad_;  // 本次执行的俯仰目标角（电机空间，已由 tilt_angle_rad 查表换算）
 
   rclcpp::Time state_enter_time_;
 };
